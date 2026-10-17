@@ -5,6 +5,7 @@
 .envrc.local
 .direnv/
 erl_crash.dump
+.pi/
 e2e/node_modules/
 e2e/report.json
 e2e/requests.json
