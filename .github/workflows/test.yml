@@ -38,6 +38,10 @@ jobs:
         # Manual clone: actions/checkout is a node action, and this image has no
         # node (the runner does not inject its node runtime into job containers).
         run: |
+          # The GitHub runner bind-mounts the workspace owned by a different
+          # UID than this container's user; git refuses to touch it otherwise
+          # (Forgejo mounted it as the job user, so this never triggered there).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git init --quiet "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
           git -C "$GITHUB_WORKSPACE" fetch --quiet --depth 1 origin "$REF"
