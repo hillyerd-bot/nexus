@@ -1,0 +1,42 @@
+# Local development database for nexus (Phase 2 persistence).
+#
+#   docker compose up -d
+#   cp /dev/null .env   # then add the lines below
+#
+# .env (untracked, loaded by .envrc):
+#   DATABASE_URL=postgres://nexus@127.0.0.1:5433/nexus
+#
+# First boot applies sql/schema.sql via /docker-entrypoint-initdb.d/.
+# Schema changed? Re-apply (idempotent — the DDL uses IF NOT EXISTS):
+#
+#   docker compose exec nexus-db psql -U nexus -d nexus \
+#     -f /docker-entrypoint-initdb.d/schema.sql
+#   # or, through pog:
+#   DATABASE_URL=postgres://nexus@127.0.0.1:5433/nexus \
+#     gleam run -m nexus/store/migrate
+#
+# Port 5433 on loopback avoids clashes with a local 5432; auth is trust
+# because this is a dev-only database bound to loopback — production
+# (Nomad) sets real credentials via NEXUS_PG_*.
+
+services:
+  nexus-db:
+    image: postgres:17
+    container_name: nexus-db
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_DB: nexus
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - nexus-db-data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  nexus-db-data:

@@ -1,0 +1,1027 @@
+//// Offline tests for the M3 Lustre server-component UI: init/update
+//// behaviour (selection, token assembly, turn terminal states, reconnect)
+//// and view rendering (element/text APIs only, no innerHTML).
+
+import gleam/erlang/process
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
+import gleeunit/should
+import lustre/element
+import nexus/config.{type Config}
+import nexus/session
+import nexus/ui
+
+fn test_config() -> Config {
+  config.Config(
+    base_url: "http://127.0.0.1:9",
+    api_key: "k",
+    model_default: "smart",
+    sse_first_response_timeout_ms: 1,
+    stream_idle_timeout_ms: 1,
+    spike_c_turns: 1,
+    spike_c_repeats: 1,
+    http_bind: "127.0.0.1",
+    http_port: 0,
+    ui_token: None,
+    system_prompt: "sys",
+    max_tool_iterations: 8,
+    http_fetch_max_bytes: 20_000,
+    http_fetch_timeout_ms: 2000,
+    http_fetch_allow_private: False,
+    searxng_base_url: None,
+    searxng_token: None,
+    pg_host: "127.0.0.1",
+    pg_port: 5433,
+    pg_database: "nexus",
+    pg_user: "nexus",
+    pg_password: None,
+  )
+}
+
+fn new_model() -> ui.Model {
+  let #(model, _effect) =
+    ui.init(ui.Flags(cfg: test_config(), registry: process.new_subject()))
+  model
+}
+
+fn step(model: ui.Model, msg: ui.Msg) -> ui.Model {
+  let #(next, _effect) = ui.update(model, msg)
+  next
+}
+
+fn summary(id: String, streaming: Bool) -> session.SessionSummary {
+  session.SessionSummary(
+    id: id,
+    model: "smart",
+    title: "",
+    title_source: session.AutoTitle,
+    pinned: False,
+    tags: [],
+    archived: False,
+    message_count: 0,
+    streaming: streaming,
+    created_at: 0,
+    last_active_at: 0,
+    metrics: [],
+  )
+}
+
+// ---------------------------------------------------------------------------
+// init
+// ---------------------------------------------------------------------------
+
+pub fn init_starts_empty_test() {
+  let model = new_model()
+  model.sessions |> should.equal([])
+  model.aliases |> should.equal([])
+  model.selected |> should.equal(None)
+  model.bubble |> should.equal(None)
+  model.streaming |> should.be_false
+  model.log |> should.equal([])
+  model.model_label |> should.equal("connecting…")
+}
+
+// ---------------------------------------------------------------------------
+// Session list / selection
+// ---------------------------------------------------------------------------
+
+pub fn sessions_auto_select_first_test() {
+  let model = new_model() |> step(ui.SessionsLoaded([summary("s-1", False)]))
+  model.selected |> should.equal(Some("s-1"))
+  model.create_open |> should.be_false
+}
+
+pub fn sessions_empty_opens_create_panel_test() {
+  let model = new_model() |> step(ui.SessionsLoaded([]))
+  model.selected |> should.equal(None)
+  model.create_open |> should.be_true
+}
+
+pub fn select_resets_log_and_streams_test() {
+  let model =
+    new_model()
+    |> step(ui.SessionsLoaded([summary("s-1", False), summary("s-2", False)]))
+    |> step(ui.Hello("smart", []))
+    |> step(ui.UserEcho("hi"))
+    |> step(ui.Select("s-2"))
+  model.selected |> should.equal(Some("s-2"))
+  model.log |> should.equal([])
+  model.bubble |> should.equal(None)
+  model.streaming |> should.be_false
+  model.model_label |> should.equal("connecting…")
+}
+
+pub fn select_same_session_is_noop_test() {
+  let model = new_model() |> step(ui.Select("s-1"))
+  let again = step(model, ui.Select("s-1"))
+  again.log |> should.equal(model.log)
+  again.model_label |> should.equal(model.model_label)
+}
+
+pub fn vanished_selection_ends_session_test() {
+  let model =
+    new_model()
+    |> step(ui.SessionsLoaded([summary("s-1", False)]))
+    |> step(ui.Hello("smart", []))
+    |> step(ui.UserEcho("hi"))
+    |> step(ui.Token("par"))
+  let model = model |> step(ui.SessionsLoaded([]))
+  model.selected |> should.equal(None)
+  model.log |> should.equal([])
+  model.bubble |> should.equal(None)
+  model.streaming |> should.be_false
+  model.model_label |> should.equal("session ended")
+  model.create_open |> should.be_true
+}
+
+pub fn hello_sets_label_and_busy_state_test() {
+  let model =
+    new_model()
+    |> step(ui.SessionsLoaded([summary("s-1", True)]))
+    |> step(ui.Hello("smart", []))
+  model.model_label |> should.equal("smart")
+  model.streaming |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// Token assembly / turn terminal states
+// ---------------------------------------------------------------------------
+
+pub fn tokens_assemble_into_bubble_test() {
+  let model =
+    new_model()
+    |> step(ui.Token("Hel"))
+    |> step(ui.Token("lo "))
+    |> step(ui.Token("world"))
+  model.bubble |> should.equal(Some("Hello world"))
+  model.streaming |> should.be_true
+}
+
+pub fn turn_done_commits_bubble_test() {
+  let model =
+    new_model()
+    |> step(ui.UserEcho("hi"))
+    |> step(ui.Token("Hel"))
+    |> step(ui.Token("lo"))
+    |> step(ui.TurnDone)
+  model.bubble |> should.equal(None)
+  model.streaming |> should.be_false
+  model.log
+  |> list.reverse
+  |> should.equal([ui.UserLine("hi"), ui.AssistantLine("Hello")])
+}
+
+pub fn turn_stopped_commits_partial_test() {
+  let model = new_model() |> step(ui.Token("par")) |> step(ui.TurnStopped)
+  model.bubble |> should.equal(None)
+  model.log |> should.equal([ui.AssistantLine("par")])
+}
+
+pub fn turn_failed_discards_partial_test() {
+  let model =
+    new_model()
+    |> step(ui.Token("par"))
+    |> step(ui.TurnFailed("boom"))
+  model.bubble |> should.equal(None)
+  model.streaming |> should.be_false
+  model.log
+  |> should.equal([ui.NoteLine(err: True, text: "turn failed: boom")])
+}
+
+pub fn replay_events_render_in_order_test() {
+  let model =
+    new_model()
+    |> step(ui.AssistantFull("old answer"))
+    |> step(ui.UserEcho("hi"))
+  model.log
+  |> list.reverse
+  |> should.equal([ui.AssistantLine("old answer"), ui.UserLine("hi")])
+}
+
+// ---------------------------------------------------------------------------
+// Composer / stop / send state
+// ---------------------------------------------------------------------------
+
+pub fn send_rejected_busy_note_test() {
+  let model = new_model() |> step(ui.SendRejected("busy"))
+  model.log
+  |> should.equal([
+    ui.NoteLine(err: True, text: "a reply is already streaming — stop it first"),
+  ])
+}
+
+pub fn send_accepted_rotates_composer_and_streams_test() {
+  let model = new_model() |> step(ui.SendAccepted)
+  model.composer |> should.equal(1)
+  model.streaming |> should.be_true
+}
+
+pub fn send_requested_with_blank_text_is_noop_test() {
+  let model = new_model() |> step(ui.SendRequested("   "))
+  model.composer |> should.equal(0)
+  model.streaming |> should.be_false
+}
+
+pub fn send_requested_without_session_is_noop_test() {
+  let model = new_model() |> step(ui.SendRequested("hi"))
+  model.composer |> should.equal(0)
+  model.streaming |> should.be_false
+}
+
+pub fn stop_keeps_state_until_terminal_event_test() {
+  let model = new_model() |> step(ui.StopRequested)
+  model.streaming |> should.be_false
+  model.log |> should.equal([])
+}
+
+// ---------------------------------------------------------------------------
+// Reconnect
+// ---------------------------------------------------------------------------
+
+pub fn client_connected_resets_and_counts_test() {
+  let model =
+    new_model()
+    |> step(ui.UserEcho("hi"))
+    |> step(ui.ClientConnected)
+  model.clients |> should.equal(1)
+  model.log |> should.equal([])
+  model.model_label |> should.equal("connecting…")
+}
+
+pub fn client_disconnect_never_goes_negative_test() {
+  let model = new_model() |> step(ui.ClientDisconnected)
+  model.clients |> should.equal(0)
+}
+
+// ---------------------------------------------------------------------------
+// Event translation
+// ---------------------------------------------------------------------------
+
+pub fn event_translation_test() {
+  ui.from_session_event(session.Hello("smart", 3, []))
+  |> should.equal(ui.Hello("smart", []))
+  ui.from_session_event(session.UserEcho("hi"))
+  |> should.equal(ui.UserEcho("hi"))
+  ui.from_session_event(session.AssistantFull("full"))
+  |> should.equal(ui.AssistantFull("full"))
+  ui.from_session_event(session.Token("t"))
+  |> should.equal(ui.Token("t"))
+  ui.from_session_event(session.TurnStopped(4))
+  |> should.equal(ui.TurnStopped)
+  ui.from_session_event(session.TurnFailed("x"))
+  |> should.equal(ui.TurnFailed("x"))
+}
+
+// ---------------------------------------------------------------------------
+// Tool calls: live assembly, statuses, results
+// ---------------------------------------------------------------------------
+
+pub fn tool_deltas_accumulate_into_pending_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallDelta(0, Some("call_1"), Some("web_search"), "{\"que"))
+    |> step(ui.ToolCallDelta(0, None, None, "ry\":\"cats\"}"))
+  model.pending
+  |> should.equal([
+    ui.PendingCall(
+      0,
+      Some("call_1"),
+      Some("web_search"),
+      "{\"query\":\"cats\"}",
+    ),
+  ])
+  model.streaming |> should.be_true
+}
+
+pub fn tool_delta_keeps_parallel_calls_separate_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallDelta(1, Some("call_b"), Some("http_fetch"), "{\"b"))
+    |> step(ui.ToolCallDelta(0, Some("call_a"), Some("web_search"), "{\"a"))
+    |> step(ui.ToolCallDelta(1, None, None, "\":1}"))
+  model.pending
+  |> should.equal([
+    ui.PendingCall(0, Some("call_a"), Some("web_search"), "{\"a"),
+    ui.PendingCall(1, Some("call_b"), Some("http_fetch"), "{\"b\":1}"),
+  ])
+}
+
+pub fn tool_delta_commits_bubble_first_test() {
+  let model =
+    new_model()
+    |> step(ui.UserEcho("look this up"))
+    |> step(ui.Token("checking"))
+    |> step(ui.ToolCallDelta(0, Some("call_1"), Some("web_search"), "{}"))
+  model.log
+  |> list.reverse
+  |> should.equal([
+    ui.UserLine("look this up"),
+    ui.AssistantLine("checking"),
+  ])
+  model.bubble |> should.equal(None)
+}
+
+pub fn tool_assembled_replaces_pending_with_running_card_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallDelta(0, Some("call_1"), Some("web_search"), "{\"q"))
+    |> step(ui.ToolCallAssembled("call_1", "web_search", "{\"query\":\"cats\"}"))
+  model.pending |> should.equal([])
+  model.log
+  |> should.equal([
+    ui.ToolLine(
+      "call_1",
+      "web_search",
+      "{\"query\":\"cats\"}",
+      ui.ToolRunning,
+      None,
+    ),
+  ])
+}
+
+pub fn tools_phase_clears_stale_pending_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallDelta(0, Some("call_1"), Some("web_search"), "{\"q"))
+    |> step(ui.LoopStatus(1, 8, "tools"))
+  model.pending |> should.equal([])
+  model.loop
+  |> should.equal(Some(ui.LoopState(1, 8, "tools")))
+}
+
+pub fn tool_result_completes_matching_card_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallAssembled("call_1", "web_search", "{\"query\":\"cats\"}"))
+    |> step(ui.ToolResult(
+      "call_1",
+      "web_search",
+      True,
+      "[{\"title\":\"cats\"}]",
+    ))
+  model.log
+  |> should.equal([
+    ui.ToolLine(
+      "call_1",
+      "web_search",
+      "{\"query\":\"cats\"}",
+      ui.ToolDone(True),
+      Some("[{\"title\":\"cats\"}]"),
+    ),
+  ])
+}
+
+pub fn tool_result_failure_marks_card_failed_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallAssembled("call_9", "http_fetch", "{}"))
+    |> step(ui.ToolResult("call_9", "http_fetch", False, "{\"error\":\"ssrf\"}"))
+  let assert [ui.ToolLine(_, _, _, status, result), ..] = model.log
+  status |> should.equal(ui.ToolDone(False))
+  result |> should.equal(Some("{\"error\":\"ssrf\"}"))
+}
+
+pub fn unmatched_tool_result_becomes_completed_card_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolResult("call_x", "web_search", True, "[]"))
+  model.log
+  |> should.equal([
+    ui.ToolLine("call_x", "web_search", "", ui.ToolDone(True), Some("[]")),
+  ])
+}
+
+pub fn turn_done_commits_tool_round_and_clears_loop_test() {
+  let model =
+    new_model()
+    |> step(ui.UserEcho("search"))
+    |> step(ui.Token("looking"))
+    |> step(ui.ToolCallAssembled("call_1", "web_search", "{}"))
+    |> step(ui.ToolResult("call_1", "web_search", True, "[]"))
+    |> step(ui.LoopStatus(2, 8, "request"))
+    |> step(ui.Token("found it"))
+    |> step(ui.TurnDone)
+  model.loop |> should.equal(None)
+  model.streaming |> should.be_false
+  model.log
+  |> list.reverse
+  |> should.equal([
+    ui.UserLine("search"),
+    ui.AssistantLine("looking"),
+    ui.ToolLine("call_1", "web_search", "{}", ui.ToolDone(True), Some("[]")),
+    ui.AssistantLine("found it"),
+  ])
+}
+
+pub fn turn_stopped_drops_pending_keeps_completed_rounds_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallAssembled("call_1", "http_fetch", "{}"))
+    |> step(ui.ToolResult("call_1", "http_fetch", True, "ok"))
+    |> step(ui.ToolCallDelta(0, Some("call_2"), Some("web_search"), "{\"q"))
+    |> step(ui.Token("partial"))
+    |> step(ui.TurnStopped)
+  model.pending |> should.equal([])
+  model.log
+  |> list.reverse
+  |> should.equal([
+    ui.ToolLine("call_1", "http_fetch", "{}", ui.ToolDone(True), Some("ok")),
+    ui.AssistantLine("partial"),
+  ])
+}
+
+pub fn turn_failed_rolls_back_uncommitted_turn_test() {
+  let model =
+    new_model()
+    |> step(ui.AssistantFull("previous answer"))
+    |> step(ui.UserEcho("search"))
+    |> step(ui.Token("looking"))
+    |> step(ui.ToolCallAssembled("call_1", "web_search", "{}"))
+    |> step(ui.ToolResult("call_1", "web_search", True, "[]"))
+    |> step(ui.LoopStatus(2, 8, "request"))
+    |> step(ui.Token("more"))
+    |> step(ui.TurnFailed("transport error: boom"))
+  // Nothing from the failed turn survives except the user line and note.
+  model.log
+  |> list.reverse
+  |> should.equal([
+    ui.AssistantLine("previous answer"),
+    ui.UserLine("search"),
+    ui.NoteLine(err: True, text: "turn failed: transport error: boom"),
+  ])
+  model.bubble |> should.equal(None)
+  model.pending |> should.equal([])
+  model.loop |> should.equal(None)
+  model.streaming |> should.be_false
+}
+
+pub fn guard_failure_keeps_committed_rounds_test() {
+  let model =
+    new_model()
+    |> step(ui.UserEcho("keep searching"))
+    |> step(ui.Token("partial text"))
+    |> step(ui.ToolCallAssembled("call_1", "web_search", "{}"))
+    |> step(ui.ToolResult("call_1", "web_search", True, "[]"))
+    |> step(ui.LoopStatus(8, 8, "guard"))
+    |> step(ui.TurnFailed("iteration guard: reached max 8 model round-trips"))
+  // The guard commits final text + completed rounds; only the never-run
+  // trailing call is absent.
+  model.log
+  |> list.reverse
+  |> should.equal([
+    ui.UserLine("keep searching"),
+    ui.AssistantLine("partial text"),
+    ui.ToolLine("call_1", "web_search", "{}", ui.ToolDone(True), Some("[]")),
+    ui.NoteLine(
+      err: True,
+      text: "turn failed: iteration guard: reached max 8 model round-trips",
+    ),
+  ])
+  model.guard |> should.be_false
+}
+
+// ---------------------------------------------------------------------------
+// Replay reconstruction
+// ---------------------------------------------------------------------------
+
+/// Hello replay order: user echo, assistant text, assembled calls, results.
+/// The component must rebuild the same card structure live events produce.
+pub fn replay_reconstructs_complete_tool_history_test() {
+  let model =
+    new_model()
+    |> step(ui.Hello("smart", []))
+    |> step(ui.UserEcho("search for cats"))
+    |> step(ui.AssistantFull("checking"))
+    |> step(ui.ToolCallAssembled("call_1", "web_search", "{\"query\":\"cats\"}"))
+    |> step(ui.ToolResult(
+      "call_1",
+      "web_search",
+      True,
+      "[{\"title\":\"cats\"}]",
+    ))
+    |> step(ui.AssistantFull("cats are great"))
+  model.log
+  |> list.reverse
+  |> should.equal([
+    ui.UserLine("search for cats"),
+    ui.AssistantLine("checking"),
+    ui.ToolLine(
+      "call_1",
+      "web_search",
+      "{\"query\":\"cats\"}",
+      ui.ToolDone(True),
+      Some("[{\"title\":\"cats\"}]"),
+    ),
+    ui.AssistantLine("cats are great"),
+  ])
+  model.pending |> should.equal([])
+}
+
+// ---------------------------------------------------------------------------
+// Tool view rendering
+// ---------------------------------------------------------------------------
+
+pub fn view_renders_tool_card_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallAssembled("call_1", "web_search", "{\"query\":\"cats\"}"))
+    |> step(ui.ToolResult(
+      "call_1",
+      "web_search",
+      True,
+      "[{\"title\":\"cats\"}]",
+    ))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "turn tool done"))
+  should.be_true(string.contains(html, "data-call-id=\"call_1\""))
+  should.be_true(string.contains(html, "data-tool=\"web_search\""))
+  should.be_true(string.contains(html, ">web_search</strong>"))
+  should.be_true(string.contains(html, ">completed</span>"))
+  // Lustre escapes quotes in text nodes.
+  should.be_true(string.contains(html, "{&quot;query&quot;:&quot;cats&quot;}"))
+  should.be_true(string.contains(html, "[{&quot;title&quot;:&quot;cats&quot;}]"))
+}
+
+pub fn view_renders_running_and_failed_states_test() {
+  let running =
+    new_model() |> step(ui.ToolCallAssembled("call_1", "http_fetch", "{}"))
+  running |> view_string |> should_contain("turn tool running")
+  running |> view_string |> should_contain(">running</span>")
+  let failed =
+    new_model()
+    |> step(ui.ToolCallAssembled("call_2", "http_fetch", "{}"))
+    |> step(ui.ToolResult("call_2", "http_fetch", False, "{\"error\":\"no\"}"))
+  failed |> view_string |> should_contain("turn tool failed")
+  failed |> view_string |> should_contain(">failed</span>")
+}
+
+pub fn view_truncates_tool_previews_test() {
+  let long_args = string.repeat("a", 500)
+  let long_result = string.repeat("r", 500)
+  let model =
+    new_model()
+    |> step(ui.ToolCallAssembled("call_1", "http_fetch", long_args))
+    |> step(ui.ToolResult("call_1", "http_fetch", True, long_result))
+  let html = view_string(model)
+  // 120-char argument preview + ellipsis, 200-char result preview.
+  should.be_true(string.contains(html, string.repeat("a", 120) <> "…"))
+  should.be_false(string.contains(html, string.repeat("a", 121)))
+  should.be_true(string.contains(html, string.repeat("r", 200) <> "…"))
+  should.be_false(string.contains(html, string.repeat("r", 201)))
+}
+
+pub fn view_renders_pending_card_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallDelta(0, Some("call_1"), Some("web_search"), "{\"que"))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "turn tool running pending"))
+  should.be_true(string.contains(html, "data-call-index=\"0\""))
+  should.be_true(string.contains(html, ">web_search</strong>"))
+  should.be_true(string.contains(html, "{&quot;que"))
+}
+
+pub fn view_escapes_tool_content_test() {
+  let model =
+    new_model()
+    |> step(ui.ToolCallAssembled("<x>", "web_search", "{}"))
+    |> step(ui.ToolResult(
+      "<x>",
+      "web_search",
+      True,
+      "<script>alert(1)</script>",
+    ))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "&lt;script&gt;"))
+  should.be_false(string.contains(html, "<script>alert"))
+}
+
+pub fn view_renders_loop_chip_test() {
+  let model = new_model() |> step(ui.LoopStatus(2, 8, "tools"))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "id=\"loop-status\""))
+  should.be_true(string.contains(html, "iter 2/8 · tools"))
+}
+
+pub fn view_hides_loop_chip_without_loop_test() {
+  // Lustre SSR sorts attributes: hidden precedes id.
+  new_model() |> view_string |> should_contain("hidden id=\"loop-status\"")
+}
+
+pub fn view_renders_guard_chip_terminal_test() {
+  let model = new_model() |> step(ui.LoopStatus(8, 8, "guard"))
+  model |> view_string |> should_contain("iter 8/8 · guard")
+  let terminal = model |> step(ui.TurnFailed("iteration guard: reached max 8"))
+  terminal |> view_string |> should_contain("turn failed: iteration guard")
+}
+
+fn should_contain(haystack: String, needle: String) {
+  should.be_true(string.contains(haystack, needle))
+}
+
+// ---------------------------------------------------------------------------
+// View strings
+// ---------------------------------------------------------------------------
+
+fn view_string(model: ui.Model) -> String {
+  element.to_string(ui.view(model))
+}
+
+pub fn view_renders_shell_and_sidebar_test() {
+  let model =
+    new_model()
+    |> step(ui.AliasesLoaded(["smart", "fast"]))
+    |> step(ui.SessionsLoaded([summary("s-1", False)]))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "id=\"app\""))
+  should.be_true(string.contains(html, "id=\"session-list\""))
+  // M3 organization: the row carries the session id and the model alias as
+  // its subtitle (title falls back to the alias until auto-titled).
+  should.be_true(string.contains(html, "data-session-id=\"s-1\""))
+  should.be_true(string.contains(html, "smart · "))
+  should.be_true(string.contains(html, "aria-current=\"true\""))
+  should.be_true(string.contains(html, "id=\"model-picker\""))
+  should.be_true(string.contains(html, "value=\"fast\""))
+  should.be_true(string.contains(html, "id=\"tag-filter\""))
+  should.be_true(string.contains(html, "Show archived"))
+  // No raw HTML injection: dynamic text is escaped by Lustre text nodes.
+  should.be_false(string.contains(html, "innerHTML"))
+}
+
+pub fn view_renders_empty_states_test() {
+  let html = new_model() |> view_string
+  should.be_true(string.contains(html, "No sessions yet."))
+  should.be_true(string.contains(html, "No turns yet."))
+  should.be_true(string.contains(html, "disabled"))
+}
+
+/// The composer must be an uncontrolled textarea inside a keyed form: the
+/// key (invisible in HTML) rotates on every accepted send so the client
+/// runtime replaces — and thereby clears — the element.
+pub fn view_renders_keyed_composer_form_test() {
+  let html = new_model() |> view_string
+  // Lustre SSR sorts attributes, so `action` precedes `id` on the form.
+  should.be_true(string.contains(html, "<form action=\"#\" id=\"composer\""))
+  should.be_true(string.contains(html, "<textarea"))
+  should.be_true(string.contains(html, "name=\"text\""))
+  // Submit (not click) carries the field value; Stop must opt out of it.
+  should.be_true(string.contains(html, "type=\"submit\""))
+  should.be_true(string.contains(html, "type=\"button\""))
+  // No draft text is ever rendered into the element: it stays uncontrolled.
+  should.be_false(string.contains(html, ">hello</textarea>"))
+}
+
+pub fn composer_key_rotates_after_send_test() {
+  let before = new_model() |> view_string
+  let after = new_model() |> step(ui.SendAccepted) |> view_string
+  should.be_true(string.contains(before, "autofocus"))
+  should.be_true(string.contains(after, "autofocus"))
+  // The generation counter lives in the (virtual) key, not the HTML; the
+  // observable contract is that the model rotates it exactly once.
+  let model = new_model() |> step(ui.SendAccepted)
+  model.composer |> should.equal(1)
+}
+
+pub fn view_escapes_markup_test() {
+  let model =
+    new_model()
+    |> step(ui.UserEcho("<script>alert(1)</script>"))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "&lt;script&gt;"))
+  should.be_false(string.contains(html, "<script>alert"))
+}
+
+pub fn view_renders_streaming_bubble_test() {
+  let model = new_model() |> step(ui.Token("Hel")) |> step(ui.Token("lo"))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "Hello"))
+  should.be_true(string.contains(html, "turn assistant"))
+}
+
+pub fn view_renders_metrics_line_test() {
+  let sample =
+    session.MetricSample(
+      outcome: session.Completed,
+      ttft_ms: Some(12),
+      duration_ms: 345,
+      token_deltas: 2,
+      prompt_tokens: Some(100),
+      cached_tokens: Some(80),
+      stopped_chars: None,
+      failure_reason: None,
+    )
+  let model = new_model() |> step(ui.Hello("smart", [sample]))
+  let html = view_string(model)
+  should.be_true(string.contains(html, "completed"))
+  should.be_true(string.contains(html, "TTFT 12ms"))
+  should.be_true(string.contains(html, "cached 80/100"))
+}
+
+pub fn metric_line_variants_test() {
+  ui.metric_line(session.MetricSample(
+    outcome: session.Stopped,
+    ttft_ms: None,
+    duration_ms: 10,
+    token_deltas: 1,
+    prompt_tokens: None,
+    cached_tokens: None,
+    stopped_chars: Some(4),
+    failure_reason: None,
+  ))
+  |> should.equal("TTFT – · 10ms · 1 deltas · stopped at 4 chars")
+
+  ui.metric_line(session.MetricSample(
+    outcome: session.Failed,
+    ttft_ms: None,
+    duration_ms: 10,
+    token_deltas: 1,
+    prompt_tokens: None,
+    cached_tokens: None,
+    stopped_chars: None,
+    failure_reason: Some("upstream"),
+  ))
+  |> should.equal("TTFT – · 10ms · 1 deltas · upstream")
+}
+
+// ---------------------------------------------------------------------------
+// M3 session organization: buckets, relative time, filter, update flows
+// ---------------------------------------------------------------------------
+
+/// 1970-01-03T00:00:10Z — a frozen "now" so bucket edges are exact.
+const bucket_now = 172_810
+
+pub fn bucket_boundaries_test() {
+  // Same UTC day (and future skew): Today.
+  ui.bucket(bucket_now, bucket_now) |> should.equal(ui.Today)
+  ui.bucket(bucket_now, 172_800) |> should.equal(ui.Today)
+  ui.bucket(bucket_now, bucket_now + 500) |> should.equal(ui.Today)
+  // One second before the day boundary: yesterday.
+  ui.bucket(bucket_now, 172_799) |> should.equal(ui.Yesterday)
+  ui.bucket(bucket_now, 86_400) |> should.equal(ui.Yesterday)
+  // Two to seven days back: the previous-7-days bucket. (Pre-epoch
+  // values are exact multiples so integer truncation stays predictable.)
+  ui.bucket(bucket_now, 86_399) |> should.equal(ui.Previous7Days)
+  ui.bucket(bucket_now, 0) |> should.equal(ui.Previous7Days)
+  ui.bucket(bucket_now, -5 * 86_400) |> should.equal(ui.Previous7Days)
+  // Eight days back and older: Older.
+  ui.bucket(bucket_now, -9 * 86_400) |> should.equal(ui.Older)
+  ui.bucket(bucket_now, -30 * 86_400) |> should.equal(ui.Older)
+  // Labels are the rendered group headings.
+  ui.bucket_label(ui.Today) |> should.equal("Today")
+  ui.bucket_label(ui.Yesterday) |> should.equal("Yesterday")
+  ui.bucket_label(ui.Previous7Days) |> should.equal("Previous 7 days")
+  ui.bucket_label(ui.Older) |> should.equal("Older")
+}
+
+pub fn rel_time_buckets_test() {
+  ui.rel_time(1000, 1000) |> should.equal("just now")
+  ui.rel_time(1059, 1000) |> should.equal("just now")
+  ui.rel_time(1060, 1000) |> should.equal("1m")
+  ui.rel_time(1000 + 3599, 1000) |> should.equal("59m")
+  ui.rel_time(1000 + 3600, 1000) |> should.equal("1h")
+  ui.rel_time(1000 + 86_399, 1000) |> should.equal("23h")
+  ui.rel_time(1000 + 86_400, 1000) |> should.equal("1d")
+  ui.rel_time(1000 + 6 * 86_400, 1000) |> should.equal("6d")
+  ui.rel_time(1000 + 7 * 86_400, 1000) |> should.equal("1w")
+  ui.rel_time(1000 + 364 * 86_400, 1000) |> should.equal("52w")
+  ui.rel_time(1000 + 365 * 86_400, 1000) |> should.equal("1y")
+  // Clock skew reads as "just now", never a negative age.
+  ui.rel_time(1000, 2000) |> should.equal("just now")
+}
+
+pub fn parse_tags_test() {
+  ui.parse_tags("work, notes ,, work,GPT ")
+  |> should.equal(["work", "notes", "GPT"])
+  ui.parse_tags("  ") |> should.equal([])
+  ui.parse_tags("") |> should.equal([])
+  ui.parse_tags("single") |> should.equal(["single"])
+}
+
+pub fn matches_filter_test() {
+  let s = meta_summary("s-1", "Deploy notes", False, ["Ops", "infra"], False, 0)
+  // Empty filter matches everything.
+  ui.matches_filter(s, "") |> should.be_true
+  ui.matches_filter(s, "   ") |> should.be_true
+  // Title and tags, case-insensitively.
+  ui.matches_filter(s, "deploy") |> should.be_true
+  ui.matches_filter(s, "DEPLOY") |> should.be_true
+  ui.matches_filter(s, "ops") |> should.be_true
+  ui.matches_filter(s, "INFRA") |> should.be_true
+  ui.matches_filter(s, "notes") |> should.be_true
+  // No match on unrelated text.
+  ui.matches_filter(s, "cooking") |> should.be_false
+}
+
+/// A summary with explicit organization metadata for the tests below.
+fn meta_summary(
+  id: String,
+  title: String,
+  pinned: Bool,
+  tags: List(String),
+  archived: Bool,
+  last_active_at: Int,
+) -> session.SessionSummary {
+  session.SessionSummary(
+    id: id,
+    model: "smart",
+    title: title,
+    title_source: session.AutoTitle,
+    pinned: pinned,
+    tags: tags,
+    archived: archived,
+    message_count: 2,
+    streaming: False,
+    created_at: last_active_at,
+    last_active_at: last_active_at,
+    metrics: [],
+  )
+}
+
+pub fn sessions_auto_select_first_active_test() {
+  let archived = meta_summary("s-1", "Old", False, [], True, 0)
+  let active = meta_summary("s-2", "New", False, [], False, 0)
+  let model =
+    new_model()
+    |> step(ui.SessionsLoaded([archived, active]))
+  // The archived row is soft-hidden, so auto-selection skips it.
+  model.selected |> should.equal(Some("s-2"))
+  model.create_open |> should.be_false
+}
+
+pub fn archived_selection_survives_refresh_test() {
+  let archived = meta_summary("s-1", "Old", False, [], True, 0)
+  let model =
+    new_model()
+    |> step(ui.Select("s-1"))
+    |> step(ui.SessionsLoaded([archived]))
+  // Archiving the open session keeps it open (the user sees what they
+  // archived); only a real disappearance ends it.
+  model.selected |> should.equal(Some("s-1"))
+  model.model_label |> should.equal("connecting…")
+}
+
+pub fn all_archived_opens_create_panel_test() {
+  let archived = meta_summary("s-1", "Old", False, [], True, 0)
+  let model = new_model() |> step(ui.SessionsLoaded([archived]))
+  model.selected |> should.equal(None)
+  // No active session to select: the create panel opens so the sidebar is
+  // never a dead end.
+  model.create_open |> should.be_true
+}
+
+pub fn delete_of_selection_reselects_first_active_test() {
+  let a = meta_summary("s-1", "A", False, [], False, 0)
+  let b = meta_summary("s-2", "B", False, [], False, 0)
+  let model =
+    new_model()
+    |> step(ui.SessionsLoaded([a, b]))
+    |> step(ui.Select("s-2"))
+    |> step(ui.SessionsLoaded([a]))
+  model.selected |> should.equal(Some("s-1"))
+  model.log |> should.equal([])
+}
+
+// ---------------------------------------------------------------------------
+// Organization update flows
+// ---------------------------------------------------------------------------
+
+pub fn tag_filter_update_test() {
+  let model = new_model() |> step(ui.TagFilterChanged("op"))
+  model.tag_filter |> should.equal("op")
+  // Typing never rotates the keyed input.
+  model.filter_gen |> should.equal(0)
+  // Programmatic sets do (chip click / clear).
+  let set = step(model, ui.TagFilterSet("ops"))
+  set.tag_filter |> should.equal("ops")
+  set.filter_gen |> should.equal(1)
+  let cleared = step(set, ui.TagFilterSet(""))
+  cleared.tag_filter |> should.equal("")
+  cleared.filter_gen |> should.equal(2)
+}
+
+pub fn archived_toggle_and_row_editors_test() {
+  let model =
+    new_model()
+    |> step(ui.SessionsLoaded([summary("s-1", False)]))
+    |> step(ui.ArchivedToggled)
+  model.show_archived |> should.be_true
+
+  // Editors open one at a time and close on a second click.
+  let model = step(model, ui.RenameToggled("s-1"))
+  model.rename_open |> should.equal(Some("s-1"))
+  let model = step(model, ui.TagsToggled("s-1"))
+  model.rename_open |> should.equal(None)
+  model.tags_open |> should.equal(Some("s-1"))
+  let model = step(model, ui.TagsToggled("s-1"))
+  model.tags_open |> should.equal(None)
+
+  // Two-step delete: arm, keep calm, cancel.
+  let model = step(model, ui.DeleteRequested("s-1"))
+  model.confirm_delete |> should.equal(Some("s-1"))
+  let model = step(model, ui.DeleteCancelled)
+  model.confirm_delete |> should.equal(None)
+  // Arming the confirm closes any open editor.
+  let model = step(model, ui.RenameToggled("s-1"))
+  let model = step(model, ui.DeleteRequested("s-1"))
+  model.rename_open |> should.equal(None)
+  model.confirm_delete |> should.equal(Some("s-1"))
+}
+
+// ---------------------------------------------------------------------------
+// Organization view rendering
+// ---------------------------------------------------------------------------
+
+pub fn view_renders_pinned_and_buckets_test() {
+  let now = 1_700_000_000
+  let pinned = meta_summary("s-1", "Pinned one", True, [], False, now)
+  let today = meta_summary("s-2", "Today chat", False, ["ops"], False, now)
+  let older =
+    meta_summary("s-3", "Old chat", False, [], False, now - 30 * 86_400)
+  let html =
+    new_model()
+    |> step(ui.SessionsLoaded([pinned, today, older]))
+    |> view_string
+  should.be_true(string.contains(html, "Pinned"))
+  should.be_true(string.contains(html, "Pinned one"))
+  should.be_true(string.contains(html, "Today"))
+  should.be_true(string.contains(html, "Today chat"))
+  should.be_true(string.contains(html, "Older"))
+  should.be_true(string.contains(html, "Old chat"))
+  // No yesterday / previous-7 groups: empty buckets render nothing.
+  should.be_false(string.contains(html, "Yesterday"))
+  should.be_false(string.contains(html, "Previous 7 days"))
+  // Tag chips render; clicking one sets the filter (server-side handler).
+  should.be_true(string.contains(html, "tag-chip"))
+  should.be_true(string.contains(html, "ops"))
+  // Compact controls are all present.
+  should.be_true(string.contains(html, "Unpin"))
+  should.be_true(string.contains(html, "Pin"))
+  should.be_true(string.contains(html, "Rename"))
+  should.be_true(string.contains(html, "Archive"))
+  should.be_true(string.contains(html, "Delete"))
+}
+
+pub fn view_renders_archived_only_when_shown_test() {
+  let archived = meta_summary("s-9", "Shelved", False, [], True, 1_700_000_000)
+  let hidden =
+    new_model()
+    |> step(ui.SessionsLoaded([archived]))
+    |> view_string
+  // Soft-hidden by default: the row is absent, the empty state shows.
+  should.be_false(string.contains(hidden, "Shelved"))
+  should.be_true(string.contains(hidden, "No sessions yet."))
+
+  let shown =
+    new_model()
+    |> step(ui.SessionsLoaded([archived]))
+    |> step(ui.ArchivedToggled)
+    |> view_string
+  should.be_true(string.contains(shown, "Archived"))
+  should.be_true(string.contains(shown, "Shelved"))
+  should.be_true(string.contains(shown, "Restore"))
+  // Invariant: archived rows carry no pin control (archiving unpins;
+  // the registry refuses pins on archived sessions).
+  should.be_false(string.contains(shown, ">Pin<"))
+  should.be_false(string.contains(shown, ">Unpin<"))
+}
+
+pub fn view_hides_rows_failing_the_filter_test() {
+  let a =
+    meta_summary("s-1", "Deploy notes", False, ["ops"], False, 1_700_000_000)
+  let b = meta_summary("s-2", "Cooking", False, [], False, 1_700_000_000)
+  let html =
+    new_model()
+    |> step(ui.SessionsLoaded([a, b]))
+    |> step(ui.TagFilterChanged("dep"))
+    |> view_string
+  should.be_true(string.contains(html, "Deploy notes"))
+  should.be_false(string.contains(html, "Cooking"))
+  // And the clear affordance appears with a non-empty filter.
+  should.be_true(string.contains(html, "filter-clear"))
+}
+
+pub fn view_inline_editors_hidden_until_opened_test() {
+  let a =
+    meta_summary("s-1", "Deploy notes", False, ["ops"], False, 1_700_000_000)
+  let base =
+    new_model()
+    |> step(ui.SessionsLoaded([a]))
+    |> view_string
+  // Editors and the delete confirm render but are hidden (attr.hidden).
+  should.be_true(string.contains(base, "inline-editor"))
+  should.be_true(string.contains(base, "confirm-delete"))
+  let opened =
+    new_model()
+    |> step(ui.SessionsLoaded([a]))
+    |> step(ui.RenameToggled("s-1"))
+    |> view_string
+  // The rename input carries the current title as its starting value.
+  should.be_true(string.contains(opened, "value=\"Deploy notes\""))
+  let tags_open =
+    new_model()
+    |> step(ui.SessionsLoaded([a]))
+    |> step(ui.TagsToggled("s-1"))
+    |> view_string
+  should.be_true(string.contains(tags_open, "value=\"ops\""))
+}

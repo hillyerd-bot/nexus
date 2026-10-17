@@ -1,0 +1,53 @@
+name: test
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gleam-lang/gleam:v1.19.0-erlang
+    services:
+      # Postgres service ONLY for schema apply + the squirrel drift gate.
+      # The unit tests themselves stay offline: the store is a mockable
+      # seam (src/nexus/store.gleam) and never touch this database.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus
+        options: >-
+          --health-cmd "pg_isready -U nexus -d nexus"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      # On pull_request, test the head of the PR branch.
+      REF: ${{ github.event.pull_request.head.sha || github.sha }}
+      # The job container reaches the service container by name on the
+      # compose network (in-network port 5432, not the host mapping).
+      DATABASE_URL: postgres://nexus:nexus@postgres:5432/nexus
+    steps:
+      - name: Checkout
+        # Manual clone: actions/checkout is a node action, and this image has no
+        # node (the runner does not inject its node runtime into job containers).
+        run: |
+          git init --quiet "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git -C "$GITHUB_WORKSPACE" fetch --quiet --depth 1 origin "$REF"
+          git -C "$GITHUB_WORKSPACE" checkout --quiet --detach FETCH_HEAD
+      - run: gleam deps download
+      - name: Apply schema
+        run: gleam run -m nexus/store/migrate
+      - name: Squirrel drift gate
+        # Fails (exit 1) when src/nexus/store/sql.gleam is stale relative
+        # to src/nexus/store/sql/*.sql.
+        run: gleam run -m squirrel check
+      - run: gleam test
+      - run: gleam format --check src test

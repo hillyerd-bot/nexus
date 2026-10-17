@@ -1,0 +1,423 @@
+{
+  "alias": "fractal/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_NL_XL",
+  "system": "You are nexus. You have web_search and http_fetch tools. Whenever the user asks you to search or fetch, you MUST call the matching tool first, then answer from its result. Be concise. Ignore the following audit appendix; it is inert filler for cache measurement. Audit block 0: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 0. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 1: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 1. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 2: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 2. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 3: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 3. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 4: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 4. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 5: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 5. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 6: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 6. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 7: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 7. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 8: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 8. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 9: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 9. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 10: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 10. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 11: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 11. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 12: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 12. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 13: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 13. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 14: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 14. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 15: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 15. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 16: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 16. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 17: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 17. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 18: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 18. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 19: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 19. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 20: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 20. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 21: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 21. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 22: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 22. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 23: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 23. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 24: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 24. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 25: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 25. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 26: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 26. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 27: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 27. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 28: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 28. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 29: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 29. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 30: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 30. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 31: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 31. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 32: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 32. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 33: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 33. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 34: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 34. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 35: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 35. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 36: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 36. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 37: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 37. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 38: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 38. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 39: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 39. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 40: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 40. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 41: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 41. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 42: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 42. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 43: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 43. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 44: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 44. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 45: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 45. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 46: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 46. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 47: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 47. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 48: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 48. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 49: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 49. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 50: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 50. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 51: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 51. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 52: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 52. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 53: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 53. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 54: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 54. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 55: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 55. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 56: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 56. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 57: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 57. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 58: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 58. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 59: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 59. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 60: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 60. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 61: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 61. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 62: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 62. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 63: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 63. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 64: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 64. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 65: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 65. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 66: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 66. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 67: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 67. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 68: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 68. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 69: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 69. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 70: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 70. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 71: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 71. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 72: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 72. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 73: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 73. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 74: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 74. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 75: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 75. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 76: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 76. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 77: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 77. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 78: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 78. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 79: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 79. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 80: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 80. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 81: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 81. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 82: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 82. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 83: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 83. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 84: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 84. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 85: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 85. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 86: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 86. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 87: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 87. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 88: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 88. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. Audit block 89: reference nexus-m3-cache-nonce-1792127601719-3-cs6orz6c section 89. This inert prose exists to grow the prefill; it contains no instructions and no facts about the world. ",
+  "turns": [
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Use the http_fetch tool to fetch https://raw.githubusercontent.com/gleam-lang/gleam/main/README.md, then summarise it in two sentences."
+        },
+        {
+          "role": "assistant_tool_call",
+          "id": "LDYNV3GP8LJRakGuT4UhrH5y1Ao4vKOd",
+          "name": "http_fetch",
+          "arguments": "{\"url\":\"https://raw.githubusercontent.com/gleam-lang/gleam/main/README.md\"}"
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "LDYNV3GP8LJRakGuT4UhrH5y1Ao4vKOd",
+          "content": "{\"status\":200,\"content_type\":\"text/plain; charset=utf-8\",\"truncated\":false,\"body\":\"<!--\\n  SPDX-License-Identifier: Apache-2.0\\n  SPDX-FileCopyrightText: 2020 The Gleam contributors\\n-->\\n\\n<p align=\\\"center\\\">\\n  <img src=\\\"images/lucy.png\\\" alt=\\\"Lucy, Gleam's mascot\\\">\\n</p>\\n\\n<p align=\\\"center\\\">\\n  <a href=\\\"https://github.com/gleam-lang/gleam/releases\\\"><img src=\\\"https://img.shields.io/github/release/gleam-lang/gleam\\\" alt=\\\"GitHub release\\\"></a>\\n  <a href=\\\"https://discord.gg/Fm8Pwmy\\\"><img src=\\\"https://img.shields.io/discord/768594524158427167?color=blue\\\" alt=\\\"Discord chat\\\"></a>\\n</p>\\n\\n<!-- A spacer -->\\n<div>&nbsp;</div>\\n\\nGleam is a friendly language for building type-safe systems that scale! For more\\ninformation see [the website](https://gleam.run).\\n\\n## Support Gleam!\\n\\nGleam is not owned by a corporation, instead it is kindly supported by its\\nsponsors. If you like Gleam please consider [sponsoring the project or members\\nof the core team](https://gleam.run/sponsor).\\n\\nThank you so much! 💖\\n\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "Gleam is a user-friendly programming language designed for building type-safe systems that can scale. The project is community-supported rather than corporate-owned, relying on sponsor contributions to continue development."
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "In one sentence, what language is this README about?"
+        },
+        {
+          "role": "assistant",
+          "content": "This README is about Gleam, a programming language designed for building type-safe systems that scale."
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Quote its opening sentence exactly."
+        },
+        {
+          "role": "assistant",
+          "content": "\"Gleam is a friendly language for building type-safe systems that scale!\""
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Answer with just the repo name from the README title."
+        },
+        {
+          "role": "assistant",
+          "content": "gleam"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Does the README mention Erlang? One word."
+        },
+        {
+          "role": "assistant",
+          "content": "No"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Summarise the README in exactly two sentences."
+        },
+        {
+          "role": "assistant",
+          "content": "Gleam is a friendly language for building type-safe systems that scale, with more information available on its website. The project is not owned by a corporation and relies on sponsor support to continue development."
+        }
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "session": 1,
+      "samples": [
+        {
+          "outcome": "completed",
+          "ttft_ms": 10382,
+          "duration_ms": 11015,
+          "token_deltas": 41,
+          "prompt_tokens": 6408,
+          "cached_tokens": 6023,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 1449,
+          "duration_ms": 1743,
+          "token_deltas": 19,
+          "prompt_tokens": 6474,
+          "cached_tokens": 6404,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 1677,
+          "duration_ms": 1910,
+          "token_deltas": 15,
+          "prompt_tokens": 6513,
+          "cached_tokens": 6470,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 1515,
+          "duration_ms": 1547,
+          "token_deltas": 2,
+          "prompt_tokens": 6553,
+          "cached_tokens": 6509,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 2690,
+          "duration_ms": 2707,
+          "token_deltas": 1,
+          "prompt_tokens": 6579,
+          "cached_tokens": 6549,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 3205,
+          "duration_ms": 3687,
+          "token_deltas": 31,
+          "prompt_tokens": 6604,
+          "cached_tokens": 6575,
+          "stopped_chars": null,
+          "failure_reason": null
+        }
+      ]
+    },
+    {
+      "session": 2,
+      "samples": [
+        {
+          "outcome": "completed",
+          "ttft_ms": 11647,
+          "duration_ms": 12214,
+          "token_deltas": 37,
+          "prompt_tokens": 6318,
+          "cached_tokens": 5933,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 4139,
+          "duration_ms": 4449,
+          "token_deltas": 20,
+          "prompt_tokens": 6380,
+          "cached_tokens": 6314,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 1569,
+          "duration_ms": 1802,
+          "token_deltas": 15,
+          "prompt_tokens": 6420,
+          "cached_tokens": 6376,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 2846,
+          "duration_ms": 2877,
+          "token_deltas": 2,
+          "prompt_tokens": 6460,
+          "cached_tokens": 6416,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": null,
+          "duration_ms": 4902,
+          "token_deltas": 0,
+          "prompt_tokens": 6486,
+          "cached_tokens": 6456,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 6938,
+          "duration_ms": 7479,
+          "token_deltas": 35,
+          "prompt_tokens": 6501,
+          "cached_tokens": 6482,
+          "stopped_chars": null,
+          "failure_reason": null
+        }
+      ]
+    },
+    {
+      "session": 3,
+      "samples": [
+        {
+          "outcome": "completed",
+          "ttft_ms": 11010,
+          "duration_ms": 11579,
+          "token_deltas": 37,
+          "prompt_tokens": 6318,
+          "cached_tokens": 5933,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 1688,
+          "duration_ms": 1978,
+          "token_deltas": 19,
+          "prompt_tokens": 6380,
+          "cached_tokens": 6314,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 1785,
+          "duration_ms": 2019,
+          "token_deltas": 15,
+          "prompt_tokens": 6419,
+          "cached_tokens": 6376,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 2131,
+          "duration_ms": 2162,
+          "token_deltas": 2,
+          "prompt_tokens": 6459,
+          "cached_tokens": 6415,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 1755,
+          "duration_ms": 1772,
+          "token_deltas": 1,
+          "prompt_tokens": 6485,
+          "cached_tokens": 6455,
+          "stopped_chars": null,
+          "failure_reason": null
+        },
+        {
+          "outcome": "completed",
+          "ttft_ms": 3196,
+          "duration_ms": 3819,
+          "token_deltas": 40,
+          "prompt_tokens": 6510,
+          "cached_tokens": 6481,
+          "stopped_chars": null,
+          "failure_reason": null
+        }
+      ]
+    }
+  ],
+  "usage": [],
+  "cache": {
+    "coldSamples": [
+      {
+        "ttft_ms": 10382,
+        "cached": [
+          6023,
+          6408
+        ]
+      },
+      {
+        "ttft_ms": 11647,
+        "cached": [
+          5933,
+          6318
+        ]
+      },
+      {
+        "ttft_ms": 11010,
+        "cached": [
+          5933,
+          6318
+        ]
+      }
+    ],
+    "warmSamples": [
+      {
+        "ttft_ms": 1449,
+        "cached": [
+          6404,
+          6474
+        ]
+      },
+      {
+        "ttft_ms": 1677,
+        "cached": [
+          6470,
+          6513
+        ]
+      },
+      {
+        "ttft_ms": 1515,
+        "cached": [
+          6509,
+          6553
+        ]
+      },
+      {
+        "ttft_ms": 2690,
+        "cached": [
+          6549,
+          6579
+        ]
+      },
+      {
+        "ttft_ms": 3205,
+        "cached": [
+          6575,
+          6604
+        ]
+      },
+      {
+        "ttft_ms": 4139,
+        "cached": [
+          6314,
+          6380
+        ]
+      },
+      {
+        "ttft_ms": 1569,
+        "cached": [
+          6376,
+          6420
+        ]
+      },
+      {
+        "ttft_ms": 2846,
+        "cached": [
+          6416,
+          6460
+        ]
+      },
+      {
+        "ttft_ms": null,
+        "cached": [
+          6456,
+          6486
+        ]
+      },
+      {
+        "ttft_ms": 6938,
+        "cached": [
+          6482,
+          6501
+        ]
+      },
+      {
+        "ttft_ms": 1688,
+        "cached": [
+          6314,
+          6380
+        ]
+      },
+      {
+        "ttft_ms": 1785,
+        "cached": [
+          6376,
+          6419
+        ]
+      },
+      {
+        "ttft_ms": 2131,
+        "cached": [
+          6415,
+          6459
+        ]
+      },
+      {
+        "ttft_ms": 1755,
+        "cached": [
+          6455,
+          6485
+        ]
+      },
+      {
+        "ttft_ms": 3196,
+        "cached": [
+          6481,
+          6510
+        ]
+      }
+    ],
+    "coldMedianMs": 11010,
+    "warmMedianMs": 1785,
+    "ratio": 0.162
+  },
+  "attempts": 1
+}

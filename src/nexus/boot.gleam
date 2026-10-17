@@ -1,0 +1,137 @@
+//// Boot: load config (loudly), then bring up the M3 supervision tree —
+//// root supervisor (OneForAll) with the session **factory supervisor**
+//// first, the **session registry** second, and the mist server third, so
+//// HTTP traffic always finds a live registry and the registry always finds
+//// its factory (M2 plan §2/§7 step 3).
+////
+//// Session actors are started dynamically as temporary children of the
+//// factory; only the registry replaces them (same ID, empty transcript).
+////
+//// Restart recovery (PRD acceptance): the supervisor is linked to this
+//// process; if it gives up (crash loop) the VM halts and the *outer*
+//// supervisor (Nomad job / run script) restarts us into a clean, empty
+//// registry — history loss on restart is accepted by the PRD for the MVP.
+
+import gleam/erlang/process
+import gleam/int
+import gleam/io
+import gleam/option.{None, Some}
+import gleam/otp/factory_supervisor
+import gleam/otp/static_supervisor as supervisor
+import gleam/otp/supervision
+import gleam/string
+import mist
+import nexus/config
+import nexus/session_registry
+import nexus/store/persist
+import nexus/ui_runtime
+import nexus/web
+
+@external(erlang, "nexus_boot_ffi", "halt")
+fn halt(code: Int) -> a
+
+pub fn main() -> Nil {
+  io.println("nexus — M3 server-component UI")
+  case config.load() {
+    Error(message) -> {
+      io.println("config error: " <> message)
+      io.println(
+        "required: BIFROST_BASE_URL, BIFROST_API_KEY, NEXUS_MODEL_DEFAULT",
+      )
+      halt(2)
+    }
+    Ok(cfg) -> {
+      // Names are stable across restarts of the supervisor itself.
+      let store_name = process.new_name("nexus_store")
+      let factory_name = process.new_name("nexus_factory")
+      let registry_name = process.new_name("nexus_registry")
+      let component_name = process.new_name("nexus_chat_component")
+      let root =
+        supervisor.new(supervisor.OneForAll)
+        // Store first (Phase 2): the registry hydrates from it at start —
+        // persistence is mandatory, so an unreachable database fails boot
+        // here (no silent ephemeral mode).
+        |> supervisor.add(
+          supervision.supervisor(fn() { persist.supervised(cfg, store_name) }),
+        )
+        |> supervisor.add(
+          // Factory second: the registry resolves it by name at startup.
+          supervision.supervisor(fn() {
+            factory_supervisor.start(session_registry.factory_builder(
+              factory_name,
+            ))
+          }),
+        )
+        |> supervisor.add(
+          supervision.supervisor(fn() {
+            session_registry.start(
+              cfg,
+              factory_supervisor.get_by_name(factory_name),
+              registry_name,
+              persist.seam(process.named_subject(store_name)),
+            )
+          }),
+        )
+        |> supervisor.add(
+          // Lustre runtime third: after the registry (it resolves sessions
+          // through it), before Mist (the WebSocket handler looks the
+          // component up by name).
+          ui_runtime.supervised(
+            component_name,
+            cfg,
+            process.named_subject(registry_name),
+          ),
+        )
+        |> supervisor.add(
+          supervision.supervisor(fn() {
+            mist.new(web.handler(cfg, registry_name, component_name))
+            |> mist.bind(cfg.http_bind)
+            |> mist.port(cfg.http_port)
+            |> mist.start
+          }),
+        )
+      case supervisor.start(root) {
+        Ok(_) -> {
+          // The tool registry is built once, here, from the global config —
+          // before any session exists — so the tool schema is frozen for
+          // every request the VM ever sends (M3 pre-creation requirement).
+          // The registry owns the frozen toolset and builds the agent-loop
+          // runner itself; boot only asks for the default-alias session.
+          case
+            session_registry.create(
+              process.named_subject(registry_name),
+              cfg.model_default,
+            )
+          {
+            Ok(_) -> {
+              io.println(
+                "listening on http://"
+                <> cfg.http_bind
+                <> ":"
+                <> int.to_string(cfg.http_port),
+              )
+              io.println("default model alias: " <> cfg.model_default)
+              case cfg.ui_token {
+                Some(_) -> io.println("auth: token required")
+                None -> io.println("auth: disabled (NEXUS_UI_TOKEN unset)")
+              }
+              process.sleep_forever()
+            }
+            Error(reason) -> {
+              io.println(
+                "failed to create default session: " <> string.inspect(reason),
+              )
+              halt(1)
+            }
+          }
+        }
+        Error(reason) -> {
+          io.println(
+            "failed to start supervision tree: " <> string.inspect(reason),
+          )
+          halt(1)
+        }
+      }
+    }
+  }
+}

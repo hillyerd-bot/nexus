@@ -1,0 +1,2 @@
+update session set archived_at = null
+where id = $1

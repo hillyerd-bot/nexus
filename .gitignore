@@ -1,0 +1,13 @@
+*.beam
+*.ez
+/build
+.env
+.envrc.local
+.direnv/
+erl_crash.dump
+e2e/node_modules/
+e2e/report.json
+e2e/requests.json
+e2e/failure-*.png
+e2e/integration-report.json
+e2e/cache-session.json
