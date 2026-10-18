@@ -124,6 +124,14 @@ pub type Store {
     unarchive: fn(String) -> Result(Nil, StoreError),
     /// Hard delete; cascades to the session's message rows.
     delete_session: fn(String) -> Result(Nil, StoreError),
+    /// Boot sweep: delete every never-used stored session older than the
+    /// grace window — one statement, so the work is bounded wherever it
+    /// runs (the registry calls it inside its actor-initialiser
+    /// deadline). The grace window keeps an empty session another
+    /// concurrently-running server just created (still empty until its
+    /// first commit) from being deleted under its live actor. Returns
+    /// the deleted ids; an error leaves the store untouched.
+    prune_never_used: fn() -> Result(List(String), StoreError),
   )
 }
 

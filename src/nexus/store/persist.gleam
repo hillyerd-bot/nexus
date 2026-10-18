@@ -32,6 +32,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/result
+import gleam/string
 import nexus/config.{type Config}
 import nexus/session
 import nexus/store
@@ -60,6 +61,9 @@ pub type Msg {
   Archive(id: String, reply: Subject(Result(Nil, String)))
   Unarchive(id: String, reply: Subject(Result(Nil, String)))
   DeleteSession(id: String, reply: Subject(Result(Nil, String)))
+  /// Boot sweep (see `prune_never_used.sql`): bulk delete of stale
+  /// never-used sessions, replying with the deleted ids.
+  PruneNeverUsed(reply: Subject(Result(List(String), String)))
 }
 
 type State {
@@ -189,6 +193,9 @@ pub fn seam(store_actor: Subject(Msg)) -> store.Store {
       actor.call(store_actor, call_timeout_ms, fn(reply) {
         DeleteSession(id, reply)
       })
+    },
+    prune_never_used: fn() {
+      actor.call(store_actor, call_timeout_ms, PruneNeverUsed)
     },
   )
 }
@@ -341,6 +348,29 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(
         State(..state, persisted: dict.delete(state.persisted, id)),
       )
+    }
+
+    PruneNeverUsed(reply) -> {
+      case sql.prune_never_used(state.db) {
+        Ok(returned) -> {
+          let ids =
+            returned.rows
+            |> list.map(fn(row) { row.id })
+            |> list.sort(string.compare)
+          // Same bookkeeping as DeleteSession: a pruned row is gone, so
+          // its persisted-length watermark must not survive it.
+          let persisted =
+            list.fold(ids, state.persisted, fn(persisted, id) {
+              dict.delete(persisted, id)
+            })
+          process.send(reply, Ok(ids))
+          actor.continue(State(..state, persisted: persisted))
+        }
+        Error(error) -> {
+          process.send(reply, Error(query_error(error)))
+          actor.continue(state)
+        }
+      }
     }
   }
 }

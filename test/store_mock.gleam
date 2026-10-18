@@ -28,6 +28,8 @@ pub type Event {
   EvArchive(id: String)
   EvUnarchive(id: String)
   EvDeleteSession(id: String)
+  /// One boot sweep: the ids it deleted (sorted).
+  EvPruneNeverUsed(ids: List(String))
 }
 
 pub type MockMsg {
@@ -54,6 +56,9 @@ pub type MockMsg {
   Archive(id: String, reply: Subject(Result(Nil, String)))
   Unarchive(id: String, reply: Subject(Result(Nil, String)))
   DeleteSession(id: String, reply: Subject(Result(Nil, String)))
+  /// Mirrors `prune_never_used.sql` (see the seam's docs in
+  /// `nexus/store`): bulk boot sweep, replying with the deleted ids.
+  PruneNeverUsed(reply: Subject(Result(List(String), String)))
   // ---- test-only introspection ----
   Events(reply: Subject(List(Event)))
   Rows(reply: Subject(List(#(String, List(store.MessageRow)))))
@@ -118,6 +123,7 @@ pub fn seam(mock: Subject(MockMsg)) -> Store {
     archive: fn(id) { call(mock, 5000, fn(r) { Archive(id, r) }) },
     unarchive: fn(id) { call(mock, 5000, fn(r) { Unarchive(id, r) }) },
     delete_session: fn(id) { call(mock, 5000, fn(r) { DeleteSession(id, r) }) },
+    prune_never_used: fn() { call(mock, 5000, PruneNeverUsed) },
   )
 }
 
@@ -376,6 +382,31 @@ fn handle(state: State, msg: MockMsg) -> actor.Next(State, MockMsg) {
       )
     }
 
+    PruneNeverUsed(reply) -> {
+      // Same contract as prune_never_used.sql: never-used (system
+      // prompt only, auto-titled, unpinned) AND older than the grace
+      // window that protects a concurrent server's fresh empty.
+      let cutoff = timing.wall_now_s() - prune_grace_s
+      let ids =
+        state.sessions
+        |> dict.values
+        |> list.filter(fn(stored) { never_used(stored.summary, cutoff) })
+        |> list.map(fn(stored) { stored.summary.id })
+        |> list.sort(string.compare)
+      let sessions =
+        list.fold(ids, state.sessions, fn(sessions, id) {
+          dict.delete(sessions, id)
+        })
+      process.send(reply, Ok(ids))
+      // An empty sweep is a no-op — not an observable store event (the
+      // metadata tests assert the exact event stream).
+      let events = case ids {
+        [] -> state.events
+        _ -> [EvPruneNeverUsed(ids), ..state.events]
+      }
+      actor.continue(State(sessions: sessions, events: events))
+    }
+
     Events(reply) -> {
       process.send(reply, list.reverse(state.events))
       actor.continue(state)
@@ -426,4 +457,15 @@ fn update_stored(state: State, id: String, f: fn(Stored) -> Stored) -> State {
       State(..state, sessions: dict.insert(state.sessions, id, f(stored)))
     Error(_) -> state
   }
+}
+
+/// The grace window, in seconds — mirrors the `interval '15 minutes'`
+/// in prune_never_used.sql.
+const prune_grace_s = 900
+
+fn never_used(summary: StoredSummary, cutoff_s: Int) -> Bool {
+  summary.message_count <= 1
+  && summary.title_source == session.AutoTitle
+  && !summary.pinned
+  && summary.last_active_at < cutoff_s
 }

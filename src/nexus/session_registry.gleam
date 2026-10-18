@@ -18,7 +18,12 @@
 ////
 //// Phase 2 (durable persistence): the registry hydrates the **dormant**
 //// set (stored-but-not-live sessions) from the store seam at boot and
-//// mints ids past every stored id. The first `Get` of a dormant id lazily
+//// mints ids past every stored id. Never-used sessions (system prompt
+//// only, untitled, unpinned) past a grace window do not survive a boot:
+//// one bulk delete (the seam's `prune_never_used`) runs before
+//// hydration, so abandoned empties cannot accumulate in the sidebar —
+//// sessions exist because someone put a message in them. The
+//// first `Get` of a dormant id lazily
 //// starts a hydrated actor — the transcript is rebuilt through
 //// `nexus/transcript.new(model, system_prompt)` + the existing `append_*`
 //// functions only, so the request prefix is byte-identical across the
@@ -247,6 +252,12 @@ pub fn start_with_runner(
 ) -> actor.StartResult(Subject(Msg)) {
   let builder =
     actor.new_with_initialiser(5000, fn(self) {
+      // Boot sweep first — ONE bulk delete through the seam (a per-row
+      // loop here would put unbounded work inside this initialiser's
+      // 5s deadline), then hydrate whatever survived. A prune error is
+      // logged and ignored: nothing was deleted, so the list still
+      // matches the store, and the next boot retries.
+      let pruned = boot_sweep(persistence)
       case persistence.list_summaries() {
         Error(error) ->
           Error("session store unreachable, cannot hydrate: " <> error)
@@ -261,7 +272,15 @@ pub fn start_with_runner(
             factory: factory,
             sessions: dict.new(),
             dormant: dormant,
-            counter: max_stored_counter(summaries),
+            // Seeded past the survivors AND the pruned ids: the bulk
+            // prune is atomic, so reuse of a pruned id could not
+            // collide — but minted ids stay monotonically increasing
+            // across sweeps anyway (a deleted s5 must not come back as
+            // a different session).
+            counter: int.max(
+              max_stored_counter(summaries),
+              max_id_suffix(pruned),
+            ),
             store: persistence,
           ))
           |> actor.returning(self)
@@ -287,9 +306,14 @@ pub fn start_with_runner(
 /// The highest numeric suffix among stored `s<N>` ids, so freshly minted
 /// ids never collide with dormant (stored-but-not-live) sessions.
 fn max_stored_counter(summaries: List(StoredSummary)) -> Int {
-  summaries
-  |> list.fold(0, fn(max, summary) {
-    case string.split(summary.id, on: "s") {
+  max_id_suffix(list.map(summaries, fn(summary) { summary.id }))
+}
+
+/// The highest numeric suffix among `s<N>`-shaped ids, 0 for none.
+fn max_id_suffix(ids: List(String)) -> Int {
+  ids
+  |> list.fold(0, fn(max, id) {
+    case string.split(id, on: "s") {
       ["", suffix] ->
         case int.parse(suffix) {
           Ok(n) -> int.max(max, n)
@@ -298,6 +322,40 @@ fn max_stored_counter(summaries: List(StoredSummary)) -> Int {
       _ -> max
     }
   })
+}
+
+/// The boot sweep: delete every stored never-used session older than
+/// the grace window (see `prune_never_used.sql` for the full contract),
+/// returning the ids it deleted ([] when the store had none or the
+/// prune failed — a failure deletes nothing).
+///
+/// Why a boot-time sweep: sessions used to be minted unconditionally at
+/// every server start, so restarts (and nothing else) accumulated empty
+/// rows forever. Creation is now always user-initiated, and this sweep
+/// retires whatever empties earlier runs left behind — including one
+/// created and abandoned mid-run, which is indistinguishable from those
+/// rows and costs nothing (there is no content to lose; a first message
+/// only counts once its turn committed). The grace window is what keeps
+/// a session another concurrently-running server created moments ago
+/// (still empty until its first commit) from being deleted under its
+/// live actor — 15 minutes is far past any first turn.
+fn boot_sweep(persistence: Store) -> List(String) {
+  case persistence.prune_never_used() {
+    Ok([]) -> []
+    Ok(ids) -> {
+      io.println(
+        "boot sweep: deleted "
+        <> int.to_string(list.length(ids))
+        <> " never-used session(s): "
+        <> string.join(ids, ", "),
+      )
+      ids
+    }
+    Error(error) -> {
+      log_store_error("prune never-used", error)
+      []
+    }
+  }
 }
 
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
