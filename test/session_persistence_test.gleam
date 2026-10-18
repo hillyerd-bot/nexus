@@ -198,6 +198,8 @@ type Boot {
 /// Boot a factory + registry over a given store seam, keeping the pids so
 /// a test can tear the whole "VM" down while the store survives.
 fn boot(seam: store.Store) -> Boot {
+  // Sessions created through the registry pin the fixture provider.
+  store_mock.ensure_fixture_provider(seam)
   let factory_name = process.new_name("nexus_persist_factory")
   let registry_name = process.new_name("nexus_persist_registry")
   let assert Ok(factory) =
@@ -235,7 +237,12 @@ fn create(
   runner: session.TurnRunner,
 ) -> session_registry.SessionRecord {
   let assert Ok(record) =
-    session_registry.create_with_runner(registry, model, runner)
+    session_registry.create_with_runner(
+      registry,
+      store_mock.fixture_provider_id,
+      model,
+      runner,
+    )
   record
 }
 
@@ -333,6 +340,11 @@ pub fn metadata_writes_through_test() {
     |> list.filter(fn(event) {
       case event {
         store_mock.EvCommit(_, _) -> False
+        // Fixture provider seeding (P1) is setup, not the sequence under
+        // test here.
+        store_mock.EvInsertProvider(_)
+        | store_mock.EvUpdateProvider(_)
+        | store_mock.EvDeleteProvider(_) -> False
         _ -> True
       }
     })
@@ -426,6 +438,7 @@ pub fn lazy_start_is_one_shot_and_continues_ids_test() {
   let mock = store_mock.start()
   let seam = store_mock.seam(mock)
   // Pre-populate the "database" with two stored sessions.
+  store_mock.ensure_fixture_provider(seam)
   let assert Ok(_) = seam.insert_session(stored("s1"), "sys-1")
   let assert Ok(_) = seam.insert_session(stored("s2"), "sys-2")
 
@@ -465,6 +478,7 @@ pub fn lazy_start_is_one_shot_and_continues_ids_test() {
 fn stored(id: String) -> store.StoredSummary {
   store.StoredSummary(
     id: id,
+    provider_id: store_mock.fixture_provider_id,
     // Manually titled: a dormant row the boot sweep must KEEP (a rename
     // is user intent, unlike a never-used empty). message_count stays 1 —
     // system prompt only, consistent with the empty row list.
@@ -532,6 +546,7 @@ pub fn delete_removes_stored_rows_and_dormant_test() {
   // Stored BEFORE boot, so the registry hydrates it into the dormant set
   // (the store is single-writer: rows appear there only through this
   // registry's create path or a previous boot).
+  store_mock.ensure_fixture_provider(seam)
   let assert Ok(_) = seam.insert_session(stored("s99"), "sys")
   let booted = boot(seam)
   let live = create(booted.registry, "alias-1", happy_runner)
@@ -563,6 +578,7 @@ fn result_is_error(result: Result(a, e)) -> Bool {
 pub fn dormant_metadata_writes_through_test() {
   let mock = store_mock.start()
   let seam = store_mock.seam(mock)
+  store_mock.ensure_fixture_provider(seam)
   let assert Ok(_) = seam.insert_session(stored("s1"), "sys")
   let booted = boot(seam)
 

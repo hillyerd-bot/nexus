@@ -83,12 +83,14 @@ fn start_registry_with(
       factory_name,
       child,
     ))
+  let persistence = store_mock.seam(store_mock.start())
+  store_mock.ensure_fixture_provider(persistence)
   let assert Ok(started) =
     session_registry.start(
       test_config(),
       factory_supervisor.get_by_name(factory_name),
       process.new_name("nexus_test_registry"),
-      store_mock.seam(store_mock.start()),
+      persistence,
     )
   started.data
 }
@@ -114,7 +116,12 @@ fn create(
   runner: session.TurnRunner,
 ) -> session_registry.SessionRecord {
   let assert Ok(record) =
-    session_registry.create_with_runner(registry, model, runner)
+    session_registry.create_with_runner(
+      registry,
+      store_mock.fixture_provider_id,
+      model,
+      runner,
+    )
   record
 }
 
@@ -150,7 +157,12 @@ pub fn create_returns_unique_ids_and_summaries_test() {
 
 pub fn create_rejects_empty_model_test() {
   let registry = start_registry()
-  session_registry.create_with_runner(registry, "   ", happy_runner)
+  session_registry.create_with_runner(
+    registry,
+    store_mock.fixture_provider_id,
+    "   ",
+    happy_runner,
+  )
   |> should.equal(Error(session_registry.EmptyModel))
   session_registry.list_sessions(registry) |> should.equal([])
 }
@@ -277,7 +289,14 @@ pub fn startup_failure_is_surfaced_not_a_crash_test() {
       Error(actor.InitFailed("child start failed"))
     })
 
-  case session_registry.create_with_runner(registry, "alpha", happy_runner) {
+  case
+    session_registry.create_with_runner(
+      registry,
+      store_mock.fixture_provider_id,
+      "alpha",
+      happy_runner,
+    )
+  {
     Error(session_registry.StartFailed(_reason)) -> Nil
     _ -> panic as "expected a StartFailed error"
   }
@@ -498,6 +517,9 @@ fn start_registry_over(
   let factory_name = process.new_name("nexus_test_factory")
   let assert Ok(_factory) =
     factory_supervisor.start(session_registry.factory_builder(factory_name))
+  // Sessions created over this seam pin the fixture provider, and the
+  // sweep tests below seed rows directly — both need it to exist.
+  store_mock.ensure_fixture_provider(persistence)
   let assert Ok(started) =
     session_registry.start(
       test_config(),
@@ -542,10 +564,14 @@ fn seed_at(
   message_count: Int,
   last_active_at: Int,
 ) -> Nil {
+  // The seeded row pins the fixture provider; the FK (enforced by the
+  // mock too) needs it in place before the insert.
+  store_mock.ensure_fixture_provider(seam)
   let assert Ok(Nil) =
     seam.insert_session(
       store.StoredSummary(
         id: id,
+        provider_id: store_mock.fixture_provider_id,
         title: title,
         title_source: title_source,
         model: "alpha",

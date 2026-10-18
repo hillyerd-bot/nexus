@@ -1064,7 +1064,11 @@ fn create_effect(model: Model, alias: String) -> Effect(Msg) {
     // The registry builds the M3 agent-loop runner itself, from the tool
     // registry frozen at its boot — sessions created here get the full
     // toolset, identical to the boot session.
-    case session_registry.create(registry, alias) {
+    // P1 multi-provider interim: no provider source exists yet (the
+    // provider registry lands in P2, the picker in P5), so the pin is
+    // empty and the store's write-through fails its FK — the session
+    // stays in-memory only until then.
+    case session_registry.create(registry, "", alias) {
       Ok(record) -> {
         let now = timing.wall_now_s()
         dispatch(

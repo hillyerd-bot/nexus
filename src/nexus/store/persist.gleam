@@ -64,6 +64,22 @@ pub type Msg {
   /// Boot sweep (see `prune_never_used.sql`): bulk delete of stale
   /// never-used sessions, replying with the deleted ids.
   PruneNeverUsed(reply: Subject(Result(List(String), String)))
+  // ---- provider rows (docs/plans/multi-provider.md §5.3) ----
+  ListProviders(reply: Subject(Result(List(store.StoredProvider), String)))
+  GetProvider(id: String, reply: Subject(Result(store.StoredProvider, String)))
+  InsertProvider(
+    provider: store.StoredProvider,
+    reply: Subject(Result(Nil, String)),
+  )
+  /// `replace_key = False` keeps the stored envelope (see
+  /// `update_provider.sql`).
+  UpdateProvider(
+    provider: store.StoredProvider,
+    replace_key: Bool,
+    reply: Subject(Result(Nil, String)),
+  )
+  CountSessionsForProvider(id: String, reply: Subject(Result(Int, String)))
+  DeleteProvider(id: String, reply: Subject(Result(Nil, String)))
 }
 
 type State {
@@ -197,6 +213,34 @@ pub fn seam(store_actor: Subject(Msg)) -> store.Store {
     prune_never_used: fn() {
       actor.call(store_actor, call_timeout_ms, PruneNeverUsed)
     },
+    list_providers: fn() {
+      actor.call(store_actor, call_timeout_ms, ListProviders)
+    },
+    get_provider: fn(id) {
+      actor.call(store_actor, call_timeout_ms, fn(reply) {
+        GetProvider(id, reply)
+      })
+    },
+    insert_provider: fn(provider) {
+      actor.call(store_actor, call_timeout_ms, fn(reply) {
+        InsertProvider(provider, reply)
+      })
+    },
+    update_provider: fn(provider, replace_key) {
+      actor.call(store_actor, call_timeout_ms, fn(reply) {
+        UpdateProvider(provider, replace_key, reply)
+      })
+    },
+    count_sessions_for_provider: fn(id) {
+      actor.call(store_actor, call_timeout_ms, fn(reply) {
+        CountSessionsForProvider(id, reply)
+      })
+    },
+    delete_provider: fn(id) {
+      actor.call(store_actor, call_timeout_ms, fn(reply) {
+        DeleteProvider(id, reply)
+      })
+    },
   )
 }
 
@@ -222,6 +266,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
               Ok(store.StoredSession(
                 summary: store.StoredSummary(
                   id: row.id,
+                  provider_id: row.provider_id,
                   title: row.title,
                   title_source: title_source(row.title_source),
                   model: row.model,
@@ -280,6 +325,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         sql.insert_session(
           state.db,
           summary.id,
+          summary.provider_id,
           summary.title,
           title_source_text(summary.title_source),
           summary.model,
@@ -371,6 +417,89 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           actor.continue(state)
         }
       }
+    }
+
+    ListProviders(reply) -> {
+      let result =
+        sql.list_providers(state.db)
+        |> result.map(fn(returned) {
+          returned.rows |> list.map(stored_provider_from_list_row)
+        })
+        |> result.map_error(query_error)
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    GetProvider(id, reply) -> {
+      let result = case sql.get_provider(state.db, id) {
+        Error(error) -> Error(query_error(error))
+        Ok(pog.Returned(_, rows)) ->
+          case rows {
+            [row] -> Ok(stored_provider_from_row(row))
+            _ -> Error("no stored provider " <> id)
+          }
+      }
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    InsertProvider(provider, reply) -> {
+      let result =
+        sql.insert_provider(
+          state.db,
+          provider.id,
+          provider.name,
+          provider.base_url,
+          key_param(provider.api_key_encrypted),
+          provider.key_version,
+          provider.dialect,
+          provider.enabled,
+          int.to_float(provider.created_at),
+        )
+        |> result.map(fn(_) { Nil })
+        |> result.map_error(query_error)
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    UpdateProvider(provider, replace_key, reply) -> {
+      let result =
+        sql.update_provider(
+          state.db,
+          provider.id,
+          provider.name,
+          provider.base_url,
+          replace_key,
+          key_param(provider.api_key_encrypted),
+          provider.key_version,
+          provider.enabled,
+        )
+        |> result.map(fn(_) { Nil })
+        |> result.map_error(query_error)
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    CountSessionsForProvider(id, reply) -> {
+      let result =
+        sql.count_sessions_for_provider(state.db, id)
+        |> result.map(fn(returned) {
+          case returned.rows {
+            [row] -> row.sessions
+            // count(*) always yields exactly one row.
+            _ -> 0
+          }
+        })
+        |> result.map_error(query_error)
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    DeleteProvider(id, reply) -> {
+      // Errors (FK restrict while referenced) flow to the caller — the
+      // registry maps them to its 409.
+      process.send(reply, update(sql.delete_provider(state.db, id)))
+      actor.continue(state)
     }
   }
 }
@@ -518,6 +647,7 @@ fn query_error(error: pog.QueryError) -> String {
 fn stored_summary_from_row(row: sql.ListSummariesRow) -> store.StoredSummary {
   store.StoredSummary(
     id: row.id,
+    provider_id: row.provider_id,
     title: row.title,
     title_source: title_source(row.title_source),
     model: row.model,
@@ -529,6 +659,44 @@ fn stored_summary_from_row(row: sql.ListSummariesRow) -> store.StoredSummary {
     // The column already counts the system prompt (Phase 1 semantics).
     message_count: row.message_count,
   )
+}
+
+fn stored_provider_from_list_row(
+  row: sql.ListProvidersRow,
+) -> store.StoredProvider {
+  store.StoredProvider(
+    id: row.id,
+    name: row.name,
+    base_url: row.base_url,
+    api_key_encrypted: row.api_key_encrypted,
+    key_version: row.key_version,
+    dialect: row.dialect,
+    enabled: row.enabled,
+    created_at: row.created_s,
+    updated_at: row.updated_s,
+  )
+}
+
+fn stored_provider_from_row(row: sql.GetProviderRow) -> store.StoredProvider {
+  store.StoredProvider(
+    id: row.id,
+    name: row.name,
+    base_url: row.base_url,
+    api_key_encrypted: row.api_key_encrypted,
+    key_version: row.key_version,
+    dialect: row.dialect,
+    enabled: row.enabled,
+    created_at: row.created_s,
+    updated_at: row.updated_s,
+  )
+}
+
+/// Bind a key envelope for the write queries: Postgres exposes no
+/// parameter nullability, so keyless (`None`) travels as the `''`
+/// sentinel that the SQL turns back into NULL via `nullif`
+/// (see `insert_provider.sql` / `update_provider.sql`).
+fn key_param(key: option.Option(BitArray)) -> BitArray {
+  option.unwrap(key, <<>>)
 }
 
 fn message_row_from_row(row: sql.LoadMessagesRow) -> store.MessageRow {

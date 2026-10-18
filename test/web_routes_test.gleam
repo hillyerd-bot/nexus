@@ -83,12 +83,14 @@ fn start_server() -> process.Subject(session_registry.Msg) {
   let component_name = process.new_name("nexus_routes_component")
   let assert Ok(_factory) =
     factory_supervisor.start(session_registry.factory_builder(factory_name))
+  let persistence = store_mock.seam(store_mock.start())
+  store_mock.ensure_fixture_provider(persistence)
   let assert Ok(started) =
     session_registry.start(
       cfg,
       factory_supervisor.get_by_name(factory_name),
       registry_name,
-      store_mock.seam(store_mock.start()),
+      persistence,
     )
   let _ =
     mist.new(web.handler(cfg, registry_name, component_name))
@@ -153,7 +155,12 @@ fn unwrap(value: Result(String, Nil)) -> String {
 pub fn patch_delete_and_archive_routes_test() {
   let registry = start_server()
   let assert Ok(record) =
-    session_registry.create_with_runner(registry, "alpha", happy_runner)
+    session_registry.create_with_runner(
+      registry,
+      store_mock.fixture_provider_id,
+      "alpha",
+      happy_runner,
+    )
 
   // ---- auth gates the new routes --------------------------------------
   // A PATCH without the token never reaches the handler.

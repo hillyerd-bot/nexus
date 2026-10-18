@@ -1,6 +1,7 @@
 -- All stored session summaries, ordered by id (the registry re-sorts).
 select
   id,
+  provider_id,
   title,
   title_source,
   model,
