@@ -58,3 +58,9 @@ The persistence layer lives in `sql/schema.sql` + `src/nexus/store/sql/`.
 5. `gleam test` must stay offline/network-free: persistence tests go
    through the mockable seam (`src/nexus/store.gleam`,
    `test/store_mock.gleam`), never a live database.
+
+The runner's statement splitter (`statements` in `migrate.gleam`) is
+quote-aware: single/double quotes, dollar quotes (`$$…$$`, `$tag$…$tag$`),
+`--` lines, and nested `/* */` comments are understood, so a `;` inside a
+`DO` block, `CREATE FUNCTION` body, or literal does not split a statement.
+Unit tests: `test/migrate_test.gleam`.

@@ -12,9 +12,10 @@
 ////       gleam run -m nexus/store/migrate
 ////
 //// The schema is written idempotently (`create table if not exists`), so
-//// re-running is safe. Statement splitting is naive on ';' after
-//// stripping `--` comments — sufficient for this schema, which contains
-//// no semicolons inside literals.
+//// re-running is safe. Statements are split by a quote-aware scanner
+//// (`statements`), so `;` inside string literals, double-quoted
+//// identifiers, dollar-quoted bodies (`CREATE FUNCTION` / `DO`), and
+//// comments do not break a statement apart.
 
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -84,20 +85,305 @@ fn or_panic(result: Result(a, e), message: String) -> a {
   }
 }
 
-/// Strip `--` comments, split on ';', drop empties.
-fn statements(schema: String) -> List(String) {
-  schema
-  |> string.split("\n")
-  |> list.map(fn(line) {
-    case string.split_once(line, "--") {
-      Ok(#(code, _comment)) -> code
-      Error(_) -> line
-    }
-  })
-  |> string.join("\n")
-  |> string.split(";")
-  |> list.map(string.trim)
-  |> list.filter(fn(statement) { statement != "" })
+/// Split a schema script into individual SQL statements on top-level
+/// semicolons.
+///
+/// The scan is quote-aware: a `;` inside a single-quoted literal, a
+/// double-quoted identifier, or a dollar-quoted body (`$$...$$`,
+/// `$tag$...$tag$`) belongs to the statement, not the separator. This is
+/// what lets `CREATE FUNCTION ... $$ ... ; ... $$`, `DO $$ ... $$`, and
+/// literals containing `;` survive. `--` line comments and nestable
+/// `/* ... */` block comments are stripped too, so a `;` in a comment is
+/// inert.
+///
+/// The script is scanned by Unicode codepoint (not grapheme cluster), so
+/// CRLF line endings and non-ASCII dollar-quote tags are handled correctly.
+/// A `$` that continues an unquoted identifier (`audit$log$`) is not a
+/// dollar-quote opener. An unterminated block comment keeps its `/*` marker
+/// so PostgreSQL rejects the statement instead of silently applying a
+/// truncated one.
+///
+/// Escaped quotes (`''` and `""`) are understood. Escape-string literals
+/// (`E'...'`) and Unicode escape strings (`U&'...'`) are recognized: a
+/// backslash inside them escapes the following character, so `\'` does not
+/// end the literal. A backslash in an ordinary single-quoted literal stays
+/// literal (PostgreSQL's default `standard_conforming_strings`).
+pub fn statements(schema: String) -> List(String) {
+  let chars =
+    schema
+    |> string.to_utf_codepoints
+    |> list.map(string.utf_codepoint_to_int)
+  scan_code(chars, [], []) |> list.reverse
+}
+
+// Codepoints used throughout the scanner: `"`=34, `&`=38, `$`=36, `'`=39,
+// `*`=42, `-`=45, `/`=47, `;`=59, `E`=69, `U`=85, `\`=92, `e`=101,
+// `u`=117, space=32, `\n`=10, `\r`=13, `_`=95.
+
+fn scan_code(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    [] -> finish(current, done)
+    [45, 45, ..rest] -> scan_line_comment(rest, current, done)
+    [47, 42, ..rest] -> scan_block_comment(1, rest, current, done)
+    [39, ..rest] ->
+      case is_escape_string_prefix(current) {
+        True -> scan_escape_string(rest, [39, ..current], done)
+        False -> scan_single(rest, [39, ..current], done)
+      }
+    [34, ..rest] -> scan_double(rest, [34, ..current], done)
+    [59, ..rest] -> scan_code(rest, [], finish(current, done))
+    [36, ..rest] ->
+      case current {
+        [previous, ..] ->
+          case is_ident_continue(previous) {
+            True -> scan_code(rest, [36, ..current], done)
+            False -> try_dollar(rest, current, done)
+          }
+        [] -> try_dollar(rest, current, done)
+      }
+    [char, ..rest] -> scan_code(rest, [char, ..current], done)
+  }
+}
+
+fn scan_single(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    [] -> finish(current, done)
+    [39, 39, ..rest] -> scan_single(rest, [39, 39, ..current], done)
+    [39, ..rest] -> scan_code(rest, [39, ..current], done)
+    [char, ..rest] -> scan_single(rest, [char, ..current], done)
+  }
+}
+
+fn scan_double(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    [] -> finish(current, done)
+    [34, 34, ..rest] -> scan_double(rest, [34, 34, ..current], done)
+    [34, ..rest] -> scan_code(rest, [34, ..current], done)
+    [char, ..rest] -> scan_double(rest, [char, ..current], done)
+  }
+}
+
+/// Consume an escape-string body (`E'...'` or `U&'...'`), where a backslash
+/// escapes the following character and `''` is an escaped quote.
+fn scan_escape_string(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    [] -> finish(current, done)
+    [92, escaped, ..rest] ->
+      scan_escape_string(rest, [escaped, 92, ..current], done)
+    [39, 39, ..rest] -> scan_escape_string(rest, [39, 39, ..current], done)
+    [39, ..rest] -> scan_code(rest, [39, ..current], done)
+    [char, ..rest] -> scan_escape_string(rest, [char, ..current], done)
+  }
+}
+
+/// True when the text just emitted ends with an `E'` or `U&'` prefix at a
+/// token boundary, i.e. the quote opens an escape string rather than a plain
+/// literal. An `E`/`U` that ends an identifier (`date'...'`) does not count.
+fn is_escape_string_prefix(current: List(Int)) -> Bool {
+  case current {
+    [38, u, ..before] ->
+      case u == 85 || u == 117 {
+        True -> not_after_identifier(before)
+        False -> False
+      }
+    [e, ..before] ->
+      case e == 69 || e == 101 {
+        True -> not_after_identifier(before)
+        False -> False
+      }
+    _ -> False
+  }
+}
+
+fn not_after_identifier(before: List(Int)) -> Bool {
+  case before {
+    [previous, ..] -> !is_ident_continue(previous)
+    [] -> True
+  }
+}
+
+fn try_dollar(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case parse_dollar(chars) {
+    Ok(#(tag, after)) -> scan_dollar(tag, after, current, done)
+    Error(_) -> scan_code(chars, [36, ..current], done)
+  }
+}
+
+fn scan_dollar(
+  tag: String,
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  let tag_codes = to_codepoints(tag)
+  let delimiter = list.append([36], list.append(tag_codes, [36]))
+  let closing = list.append(tag_codes, [36])
+  scan_dollar_body(closing, delimiter, chars, emit(delimiter, current), done)
+}
+
+fn scan_dollar_body(
+  closing: List(Int),
+  delimiter: List(Int),
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    [] -> finish(current, done)
+    [36, ..rest] ->
+      case drop_prefix(rest, closing) {
+        Ok(after) -> scan_code(after, emit(delimiter, current), done)
+        Error(_) ->
+          scan_dollar_body(closing, delimiter, rest, [36, ..current], done)
+      }
+    [char, ..rest] ->
+      scan_dollar_body(closing, delimiter, rest, [char, ..current], done)
+  }
+}
+
+fn scan_line_comment(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    [] -> finish(current, done)
+    [10, ..rest] -> scan_code(rest, [10, ..current], done)
+    [13, ..rest] -> scan_code(rest, [13, ..current], done)
+    [_, ..rest] -> scan_line_comment(rest, current, done)
+  }
+}
+
+fn scan_block_comment(
+  depth: Int,
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    // Unterminated: keep the opening marker so PostgreSQL errors on it
+    // rather than silently applying a truncated statement.
+    [] -> finish(emit([47, 42], current), done)
+    [47, 42, ..rest] -> scan_block_comment(depth + 1, rest, current, done)
+    [42, 47, ..rest] ->
+      case depth {
+        1 -> scan_code(rest, [32, ..current], done)
+        _ -> scan_block_comment(depth - 1, rest, current, done)
+      }
+    [_, ..rest] -> scan_block_comment(depth, rest, current, done)
+  }
+}
+
+/// Match a dollar-quote opener at `chars` (the text after the leading `$`)
+/// and return its tag plus the text after the closing `$`.
+fn parse_dollar(chars: List(Int)) -> Result(#(String, List(Int)), Nil) {
+  case chars {
+    [36, ..after] -> Ok(#("", after))
+    _ -> parse_dollar_tag(chars, [])
+  }
+}
+
+fn parse_dollar_tag(
+  chars: List(Int),
+  tag: List(Int),
+) -> Result(#(String, List(Int)), Nil) {
+  case chars {
+    [] -> Error(Nil)
+    [char, ..rest] ->
+      case is_tag_char(char, tag) {
+        True -> parse_dollar_tag(rest, [char, ..tag])
+        False ->
+          case char, tag {
+            36, [] -> Error(Nil)
+            36, _ -> Ok(#(codepoints_to_string(list.reverse(tag)), rest))
+            _, _ -> Error(Nil)
+          }
+      }
+  }
+}
+
+/// A dollar-quote tag is an empty string or an identifier: its first
+/// character is a letter or `_`, later ones may also be digits. `$` itself
+/// is not allowed in a tag.
+fn is_tag_char(code: Int, tag: List(Int)) -> Bool {
+  case tag {
+    [] -> is_letter(code) || code == 95
+    _ -> is_letter(code) || is_digit(code) || code == 95
+  }
+}
+
+/// Letters, digits, `_`, and `$`. PostgreSQL identifiers allow letters
+/// (including any non-ASCII character), digits, `_`, and `$` after the
+/// first character; this is used both for dollar-quote tags and to tell a
+/// `$` inside an unquoted identifier from a dollar-quote opener.
+fn is_letter(code: Int) -> Bool {
+  code >= 97 && code <= 122 || code >= 65 && code <= 90 || code >= 128
+}
+
+fn is_digit(code: Int) -> Bool {
+  code >= 48 && code <= 57
+}
+
+fn is_ident_continue(code: Int) -> Bool {
+  is_letter(code) || is_digit(code) || code == 95 || code == 36
+}
+
+fn to_codepoints(value: String) -> List(Int) {
+  value |> string.to_utf_codepoints |> list.map(string.utf_codepoint_to_int)
+}
+
+/// Append `sequence` (in order) onto the reversed `current` buffer.
+fn emit(sequence: List(Int), current: List(Int)) -> List(Int) {
+  list.append(list.reverse(sequence), current)
+}
+
+/// Drop `prefix` from the front of `chars`, or fail if it does not match.
+fn drop_prefix(chars: List(Int), prefix: List(Int)) -> Result(List(Int), Nil) {
+  case prefix {
+    [] -> Ok(chars)
+    [expected, ..more] ->
+      case chars {
+        [char, ..rest] if char == expected -> drop_prefix(rest, more)
+        _ -> Error(Nil)
+      }
+  }
+}
+
+fn codepoints_to_string(codepoints: List(Int)) -> String {
+  codepoints |> list.map(codepoint) |> string.from_utf_codepoints
+}
+
+fn codepoint(value: Int) -> UtfCodepoint {
+  let assert Ok(cp) = string.utf_codepoint(value)
+  cp
+}
+
+/// Close the current statement: trim it, keep it if non-empty.
+fn finish(current: List(Int), done: List(String)) -> List(String) {
+  case string.trim(codepoints_to_string(list.reverse(current))) {
+    "" -> done
+    statement -> [statement, ..done]
+  }
 }
 
 /// First non-empty line, truncated for the log.
