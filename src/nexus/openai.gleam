@@ -556,16 +556,3 @@ fn snippet(body: String) -> String {
     False -> body
   }
 }
-
-/// Helper for callers that want the full accumulated text out of token
-/// deltas. (Spikes print as they go; this is for tests and summaries.)
-pub fn accumulate_text(events: List(StreamEvent)) -> String {
-  events
-  |> list.filter_map(fn(event) {
-    case event {
-      TokenDelta(text) -> Ok(text)
-      _ -> Error(Nil)
-    }
-  })
-  |> string.concat
-}
