@@ -103,10 +103,11 @@ fn or_panic(result: Result(a, e), message: String) -> a {
 /// so PostgreSQL rejects the statement instead of silently applying a
 /// truncated one.
 ///
-/// Escaped quotes (`''` and `""`) are understood. PostgreSQL's default
-/// `standard_conforming_strings` is assumed, so a backslash is literal and
-/// only doubling escapes a quote (i.e. `E'...'` escape strings are not
-/// distinguished).
+/// Escaped quotes (`''` and `""`) are understood. Escape-string literals
+/// (`E'...'`) and Unicode escape strings (`U&'...'`) are recognized: a
+/// backslash inside them escapes the following character, so `\'` does not
+/// end the literal. A backslash in an ordinary single-quoted literal stays
+/// literal (PostgreSQL's default `standard_conforming_strings`).
 pub fn statements(schema: String) -> List(String) {
   let chars =
     schema
@@ -115,9 +116,9 @@ pub fn statements(schema: String) -> List(String) {
   scan_code(chars, [], []) |> list.reverse
 }
 
-// Codepoints used throughout the scanner:
-// `"`=34, `$`=36, `'`=39, `*`=42, `-`=45, `/`=47, `;`=59, space=32,
-// `\n`=10, `\r`=13, `_`=95.
+// Codepoints used throughout the scanner: `"`=34, `&`=38, `$`=36, `'`=39,
+// `*`=42, `-`=45, `/`=47, `;`=59, `E`=69, `U`=85, `\`=92, `e`=101,
+// `u`=117, space=32, `\n`=10, `\r`=13, `_`=95.
 
 fn scan_code(
   chars: List(Int),
@@ -128,7 +129,11 @@ fn scan_code(
     [] -> finish(current, done)
     [45, 45, ..rest] -> scan_line_comment(rest, current, done)
     [47, 42, ..rest] -> scan_block_comment(1, rest, current, done)
-    [39, ..rest] -> scan_single(rest, [39, ..current], done)
+    [39, ..rest] ->
+      case is_escape_string_prefix(current) {
+        True -> scan_escape_string(rest, [39, ..current], done)
+        False -> scan_single(rest, [39, ..current], done)
+      }
     [34, ..rest] -> scan_double(rest, [34, ..current], done)
     [59, ..rest] -> scan_code(rest, [], finish(current, done))
     [36, ..rest] ->
@@ -167,6 +172,49 @@ fn scan_double(
     [34, 34, ..rest] -> scan_double(rest, [34, 34, ..current], done)
     [34, ..rest] -> scan_code(rest, [34, ..current], done)
     [char, ..rest] -> scan_double(rest, [char, ..current], done)
+  }
+}
+
+/// Consume an escape-string body (`E'...'` or `U&'...'`), where a backslash
+/// escapes the following character and `''` is an escaped quote.
+fn scan_escape_string(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case chars {
+    [] -> finish(current, done)
+    [92, escaped, ..rest] ->
+      scan_escape_string(rest, [escaped, 92, ..current], done)
+    [39, 39, ..rest] -> scan_escape_string(rest, [39, 39, ..current], done)
+    [39, ..rest] -> scan_code(rest, [39, ..current], done)
+    [char, ..rest] -> scan_escape_string(rest, [char, ..current], done)
+  }
+}
+
+/// True when the text just emitted ends with an `E'` or `U&'` prefix at a
+/// token boundary, i.e. the quote opens an escape string rather than a plain
+/// literal. An `E`/`U` that ends an identifier (`date'...'`) does not count.
+fn is_escape_string_prefix(current: List(Int)) -> Bool {
+  case current {
+    [38, u, ..before] ->
+      case u == 85 || u == 117 {
+        True -> not_after_identifier(before)
+        False -> False
+      }
+    [e, ..before] ->
+      case e == 69 || e == 101 {
+        True -> not_after_identifier(before)
+        False -> False
+      }
+    _ -> False
+  }
+}
+
+fn not_after_identifier(before: List(Int)) -> Bool {
+  case before {
+    [previous, ..] -> !is_ident_continue(previous)
+    [] -> True
   }
 }
 

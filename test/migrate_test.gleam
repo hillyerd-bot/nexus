@@ -131,3 +131,33 @@ pub fn non_ascii_dollar_quote_tag_test() {
   migrate.statements("do $é$ begin; perform 1; end; $é$;select 2;")
   |> should.equal(["do $é$ begin; perform 1; end; $é$", "select 2"])
 }
+
+pub fn e_string_escaped_quote_test() {
+  migrate.statements("select E'it\\'s;ok';select 2;")
+  |> should.equal(["select E'it\\'s;ok'", "select 2"])
+}
+
+pub fn e_string_escaped_semicolon_test() {
+  migrate.statements("select E'a\\;b';select 2;")
+  |> should.equal(["select E'a\\;b'", "select 2"])
+}
+
+pub fn e_string_doubled_quote_test() {
+  migrate.statements("select E'a''b;c';select 2;")
+  |> should.equal(["select E'a''b;c'", "select 2"])
+}
+
+pub fn plain_literal_keeps_backslash_literal_test() {
+  migrate.statements("select 'a\\b;c';select 2;")
+  |> should.equal(["select 'a\\b;c'", "select 2"])
+}
+
+pub fn identifier_ending_in_e_before_literal_test() {
+  migrate.statements("select name'x;y';select 2;")
+  |> should.equal(["select name'x;y'", "select 2"])
+}
+
+pub fn uescape_string_test() {
+  migrate.statements("select U&'d\\0061t\\'s;ok';select 2;")
+  |> should.equal(["select U&'d\\0061t\\'s;ok'", "select 2"])
+}
