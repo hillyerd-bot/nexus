@@ -6,6 +6,7 @@
 //// declared but never emitted), which would have lost the audit tool's
 //// cached_tokens evidence.
 
+import gleam/http/request
 import gleam/option.{type Option, None, Some}
 import gleeunit/should
 import glopenai/chat
@@ -51,6 +52,39 @@ fn acc() -> openai.Acc {
     first_decode_error: None,
     usage: None,
   )
+}
+
+fn keyless_endpoint() -> openai.Endpoint {
+  openai.Endpoint(
+    base_url: "http://dgx.test/v1",
+    api_key: None,
+    sse_first_response_timeout_ms: 30_000,
+    stream_idle_timeout_ms: 120_000,
+  )
+}
+
+fn keyed_endpoint() -> openai.Endpoint {
+  openai.Endpoint(..keyless_endpoint(), api_key: Some("sk-test"))
+}
+
+pub fn drop_empty_bearer_removes_header_for_keyless_test() {
+  let req =
+    request.new()
+    |> request.set_header("authorization", "Bearer ")
+    |> request.set_header("content-type", "application/json")
+    |> openai.drop_empty_bearer(keyless_endpoint())
+  request.get_header(req, "authorization") |> should.be_error
+  request.get_header(req, "content-type")
+  |> should.equal(Ok("application/json"))
+}
+
+pub fn drop_empty_bearer_keeps_header_with_key_test() {
+  let req =
+    request.new()
+    |> request.set_header("authorization", "Bearer sk-test")
+    |> openai.drop_empty_bearer(keyed_endpoint())
+  request.get_header(req, "authorization")
+  |> should.equal(Ok("Bearer sk-test"))
 }
 
 fn usage_with(cached cached: Int) -> shared.CompletionUsage {

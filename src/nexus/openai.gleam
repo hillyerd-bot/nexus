@@ -23,7 +23,7 @@ import gleam/bytes_tree
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
 import gleam/http.{type Method}
-import gleam/http/request.{type Request}
+import gleam/http/request.{type Request, Request}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -118,7 +118,9 @@ pub fn endpoint_from_config(cfg: Config) -> Endpoint {
 /// with a real status code) and as the Bifrost sanity check.
 pub fn list_models(endpoint: Endpoint) -> Result(List(String), StreamError) {
   use <- ensure_boot()
-  let req = model.list_request(to_openai_config(endpoint))
+  let req =
+    model.list_request(to_openai_config(endpoint))
+    |> drop_empty_bearer(endpoint)
   use response <- result.try(
     hackney.send(req) |> result.map_error(fn(e) { Transport(send_error(e)) }),
   )
@@ -207,6 +209,7 @@ pub fn stream_with_cancel(
           to_openai_config(endpoint),
           transcript.to_request(transcript, opts),
         )
+        |> drop_empty_bearer(endpoint)
       stream_request(endpoint, req, on_event, cancel)
     }
     Error(reason) ->
@@ -564,6 +567,25 @@ fn finish_stream(
 fn to_openai_config(endpoint: Endpoint) -> OpenAiConfig {
   oai_config.new(option.unwrap(endpoint.api_key, ""))
   |> oai_config.with_api_base(endpoint.base_url)
+}
+
+/// glopenai's request builder always prepends `authorization: Bearer
+/// <api_key>` — with no key configured that would put an empty-valued
+/// `Authorization` header on the wire, which some servers and
+/// intermediaries reject. For keyless endpoints, drop the header entirely
+/// (verified live against a keyless vLLM: both shapes are accepted, but a
+/// missing header is the unambiguous one). Pure — offline-testable.
+pub fn drop_empty_bearer(req: Request(a), endpoint: Endpoint) -> Request(a) {
+  case endpoint.api_key {
+    Some(_) -> req
+    None ->
+      Request(
+        ..req,
+        headers: list.filter(req.headers, fn(header) {
+          header.0 != "authorization"
+        }),
+      )
+  }
 }
 
 fn ensure_boot(next: fn() -> Result(a, StreamError)) -> Result(a, StreamError) {
