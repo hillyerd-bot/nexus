@@ -43,7 +43,6 @@ fn acc() -> openai.Acc {
   openai.Acc(
     started_us: 0,
     ttft_us: None,
-    last_event_us: 0,
     token_deltas: 0,
     tool_call_deltas: 0,
     events_parsed: 0,
@@ -118,5 +117,4 @@ pub fn later_usage_chunk_replaces_earlier_test() {
   acc2.usage |> should.equal(Some(second))
   acc2.token_deltas |> should.equal(1)
   acc2.events_parsed |> should.equal(2)
-  acc2.last_event_us |> should.equal(20)
 }

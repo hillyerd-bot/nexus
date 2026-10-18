@@ -326,7 +326,6 @@ fn stats_to_openai(acc: StatsAcc) -> openai.StreamStats {
     events_parsed: acc.events_parsed,
     decode_errors: acc.decode_errors,
     saw_done: acc.saw_done,
-    closed_after_idle_ms: None,
     usage: acc.usage,
   )
 }

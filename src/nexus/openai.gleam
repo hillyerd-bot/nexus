@@ -73,10 +73,6 @@ pub type StreamStats {
     decode_errors: Int,
     /// Whether the `[DONE]` sentinel was observed.
     saw_done: Bool,
-    /// How long before `Closed` the last event had arrived, ms. A small
-    /// value here after a silent gap is the signature of hackney's 5s
-    /// `recv_timeout` killing the stream (spike A checklist b).
-    closed_after_idle_ms: Option(Int),
     /// Latest usage block seen on any stream chunk (usually only sent
     /// with `stream_options.include_usage`, which glopenai cannot request;
     /// see verdict doc findings 1 and 8).
@@ -239,7 +235,6 @@ fn stream_request(
               Acc(
                 started_us: started_us,
                 ttft_us: None,
-                last_event_us: started_us,
                 token_deltas: 0,
                 tool_call_deltas: 0,
                 events_parsed: 0,
@@ -357,7 +352,7 @@ fn handle_data(
     "" -> acc
     _ ->
       case chat.parse_stream_chunk(data) {
-        Ok(None) -> Acc(..acc, saw_done: True, last_event_us: now_us)
+        Ok(None) -> Acc(..acc, saw_done: True)
         Ok(Some(chunk)) -> handle_chunk(chunk, now_us, acc, on_event)
         Error(decode_error) ->
           Acc(
@@ -410,7 +405,6 @@ pub type Acc {
   Acc(
     started_us: Int,
     ttft_us: Option(Int),
-    last_event_us: Int,
     token_deltas: Int,
     tool_call_deltas: Int,
     events_parsed: Int,
@@ -432,8 +426,7 @@ pub fn handle_chunk(
   acc: Acc,
   on_event: fn(StreamEvent) -> Nil,
 ) -> Acc {
-  let acc =
-    Acc(..acc, events_parsed: acc.events_parsed + 1, last_event_us: now_us)
+  let acc = Acc(..acc, events_parsed: acc.events_parsed + 1)
   // Usage may ride on any chunk (typically the final one, and usually
   // only when the backend is asked via stream_options.include_usage).
   // Forward it as an event and keep the latest: spike C's cached_tokens
@@ -502,7 +495,6 @@ fn finish_stream(
       events_parsed: acc.events_parsed,
       decode_errors: acc.decode_errors,
       saw_done: acc.saw_done,
-      closed_after_idle_ms: Some(timing.elapsed_ms(acc.last_event_us, ended_us)),
       usage: acc.usage,
     )
   case acc.events_parsed == 0 && !acc.saw_done {
