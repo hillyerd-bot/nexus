@@ -2,7 +2,7 @@
 
 -export([ensure_hackney_started/0, halt/1, hackney_stream_start/5]).
 
-%% hackney must be running before the first httpp request; gleam does not
+%% hackney must be running before the first request; gleam does not
 %% guarantee OTP application boot order for transitive rebar3 dependencies.
 ensure_hackney_started() ->
     case application:ensure_all_started(hackney) of

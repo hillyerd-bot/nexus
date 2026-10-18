@@ -7,10 +7,10 @@
 ////   every caller (spikes A/B/C, and from M1 the session server) encodes
 ////   identically — the precondition for spike C's byte-stability evidence.
 //// - Streaming uses hackney's async messages directly so the request can set
-////   `recv_timeout` above `NEXUS_STREAM_IDLE_TIMEOUT_MS`; httpp otherwise
-////   hard-wires hackney's five-second default and closes during reasoning
-////   gaps. Nexus parses SSE frames in this module and retains typed
-////   transport errors.
+////   `recv_timeout` above `NEXUS_STREAM_IDLE_TIMEOUT_MS`; the buffered
+////   helpers otherwise hard-wire hackney's five-second default and close
+////   during reasoning gaps. Nexus parses SSE frames in this module and
+////   retains typed transport errors.
 //// - Non-200 detection works in two layers: a buffered `list_models`
 ////   preflight (real status, cheap), and a stream that closes with zero
 ////   parsed events is re-sent **buffered once** to capture the true
@@ -35,9 +35,8 @@ import glopenai/chat
 import glopenai/config.{type Config as OpenAiConfig} as oai_config
 import glopenai/model
 import glopenai/shared.{type CompletionUsage}
-import httpp/hackney
-import httpp/send
 import nexus/config.{type Config}
+import nexus/hackney
 import nexus/timing
 import nexus/transcript.{type Options, type Transcript}
 
@@ -92,7 +91,7 @@ pub fn list_models(cfg: Config) -> Result(List(String), StreamError) {
   use <- ensure_boot()
   let req = model.list_request(to_openai_config(cfg))
   use response <- result.try(
-    send.send(req) |> result.map_error(fn(e) { Transport(send_error(e)) }),
+    hackney.send(req) |> result.map_error(fn(e) { Transport(send_error(e)) }),
   )
   case response.status {
     200 ->
@@ -201,7 +200,8 @@ fn stream_request(
     Ok(Nil) -> {
       let bytes_req = request.map(req, bytes_tree.from_string)
       let url = bytes_req |> request.to_uri |> uri.to_string
-      // httpp does not expose hackney's recv_timeout option. Supply it here so
+      // nexus/hackney's buffered send does not expose hackney's
+      // recv_timeout option. Supply it here so
       // a reasoning model can remain silent for the configured idle interval
       // without hackney's five-second default closing the socket.
       let hackney_timeout = cfg.stream_idle_timeout_ms + 5000
@@ -263,7 +263,7 @@ fn stream_request(
 }
 
 type LoopMsg {
-  LoopHttp(hackney.HttppMessage)
+  LoopHttp(hackney.HackneyMessage)
   LoopCancel
 }
 
@@ -505,7 +505,7 @@ fn finish_stream(
       case acc.first_decode_error {
         Some(reason) -> Error(Decode(reason))
         None ->
-          case send.send(req) {
+          case hackney.send(req) {
             Error(e) ->
               Error(Transport(
                 "stream produced no events and buffered retry failed: "
