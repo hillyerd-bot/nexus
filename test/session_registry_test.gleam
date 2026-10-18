@@ -7,12 +7,14 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/otp/factory_supervisor
+import gleam/string
 import gleeunit/should
 import nexus/config
 import nexus/loop
 import nexus/openai
 import nexus/session
 import nexus/session_registry
+import nexus/store
 import nexus/transcript
 import store_mock
 
@@ -483,4 +485,119 @@ fn blocking_runner(_cfg, tr, cancel, _on_event) -> session.TurnOutcome {
     |> process.select_map(cancel, fn(_) { Nil })
   let _ = process.selector_receive(selector, 5000)
   session.StreamStopped(tr)
+}
+
+// ---------------------------------------------------------------------------
+// Boot sweep of never-used sessions
+// ---------------------------------------------------------------------------
+
+/// Boot a factory + registry pair over an injectable store, so the sweep
+/// runs against whatever the store was pre-seeded with — exactly what
+/// production boot sees after a restart.
+fn start_registry_over(
+  persistence: store.Store,
+) -> process.Subject(session_registry.Msg) {
+  let factory_name = process.new_name("nexus_test_factory")
+  let assert Ok(_factory) =
+    factory_supervisor.start(session_registry.factory_builder(factory_name))
+  let assert Ok(started) =
+    session_registry.start(
+      test_config(),
+      factory_supervisor.get_by_name(factory_name),
+      process.new_name("nexus_test_registry"),
+      persistence,
+    )
+  started.data
+}
+
+/// Seed one stored session row directly through the seam.
+fn seed(
+  seam: store.Store,
+  id: String,
+  title: String,
+  title_source: session.TitleSource,
+  pinned: Bool,
+  archived: Bool,
+  message_count: Int,
+) -> Nil {
+  let assert Ok(Nil) =
+    seam.insert_session(
+      store.StoredSummary(
+        id: id,
+        title: title,
+        title_source: title_source,
+        model: "alpha",
+        pinned: pinned,
+        archived: archived,
+        tags: [],
+        created_at: 1_700_000_000,
+        last_active_at: 1_700_000_000,
+        message_count: message_count,
+      ),
+      "test system prompt",
+    )
+  Nil
+}
+
+fn listed_ids(registry: process.Subject(session_registry.Msg)) -> List(String) {
+  session_registry.list_sessions(registry)
+  |> list.map(fn(summary) { summary.id })
+  |> list.sort(string.compare)
+}
+
+/// The litter older boots left behind — empty (system-prompt-only),
+/// auto-titled, unpinned, archived or not — is swept at boot. Anything
+/// with a user message, a manual rename, or a pin survives.
+pub fn boot_sweep_deletes_never_used_sessions_test() {
+  let mock = store_mock.start()
+  let seam = store_mock.seam(mock)
+  // Swept: never-used rows from earlier runs.
+  seed(seam, "s1", "", session.AutoTitle, False, False, 1)
+  seed(seam, "s2", "", session.AutoTitle, False, True, 1)
+  // Kept: used, manually renamed, pinned.
+  seed(seam, "s3", "hello world", session.AutoTitle, False, False, 3)
+  seed(seam, "s4", "keep me", session.ManualTitle, False, False, 1)
+  seed(seam, "s5", "", session.AutoTitle, True, False, 1)
+
+  let registry = start_registry_over(seam)
+  listed_ids(registry) |> should.equal(["s3", "s4", "s5"])
+
+  let swept =
+    store_mock.events(mock)
+    |> list.filter_map(fn(event) {
+      case event {
+        store_mock.EvDeleteSession(id) -> Ok(id)
+        _ -> Error(Nil)
+      }
+    })
+    |> list.sort(string.compare)
+  swept |> should.equal(["s1", "s2"])
+}
+
+/// Minted ids seed past PRE-sweep stored ids: a swept id is never reused,
+/// so a create right after boot cannot collide with a row a failed sweep
+/// delete may have left behind.
+pub fn create_after_sweep_mints_past_swept_ids_test() {
+  let mock = store_mock.start()
+  let seam = store_mock.seam(mock)
+  seed(seam, "s1", "", session.AutoTitle, False, False, 1)
+
+  let registry = start_registry_over(seam)
+  let record = create(registry, "alpha", happy_runner)
+  record.id |> should.equal("s2")
+}
+
+/// A sweep delete that fails keeps the session listed (dormant): the
+/// sidebar must never show fewer rows than the store holds, and the next
+/// boot retries the sweep.
+pub fn boot_sweep_delete_failure_keeps_session_test() {
+  let mock = store_mock.start()
+  let seam =
+    store.Store(..store_mock.seam(mock), delete_session: fn(_) {
+      Error("disk full")
+    })
+  seed(seam, "s1", "", session.AutoTitle, False, False, 1)
+
+  let registry = start_registry_over(seam)
+  listed_ids(registry) |> should.equal(["s1"])
 }

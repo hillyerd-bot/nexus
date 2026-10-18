@@ -79,9 +79,13 @@ request byte changes.
 
 `gleam run` starts the store actor (Postgres pool — first, and boot fails
 if it cannot start), a factory supervisor, a session registry hydrated
-from the store, one initial session using `NEXUS_MODEL_DEFAULT`, the
-Lustre server-component runtime, and a Mist server at the bound address
-(default `127.0.0.1:8080`). Sessions are durable: turn commits persist
+from the store, the Lustre server-component runtime, and a Mist server at
+the bound address (default `127.0.0.1:8080`). No session is created at
+boot — sessions are always user-initiated (the sidebar's create panel
+auto-opens whenever no active session is selectable), and never-used
+sessions (system prompt only, untitled, unpinned) are swept at boot, so
+restarts cannot litter the list with empties. Sessions are durable: turn
+commits persist
 write-behind (in seq order, idempotent on replay), metadata mutations
 write through, and a restart rehydrates — stored-but-not-live sessions
 appear in the sidebar and lazily start (hydrated, byte-identical request
@@ -144,7 +148,7 @@ Bifrost/SearxNG, and the production cache check whose golden fixture is
 |---|---|---|
 | `BIFROST_BASE_URL` | — | Bifrost base URL **including `/v1`** (required) |
 | `BIFROST_API_KEY` | — | bearer token (required) |
-| `NEXUS_MODEL_DEFAULT` | — | model alias for the boot session (required) |
+| `NEXUS_MODEL_DEFAULT` | — | model alias used when a session is created without an explicit model (required) |
 | `NEXUS_HTTP_BIND` | `127.0.0.1` | server bind (loopback per PRD) |
 | `NEXUS_HTTP_PORT` | `8080` | server port |
 | `NEXUS_UI_TOKEN` | unset | single-user bearer token; unset disables auth |

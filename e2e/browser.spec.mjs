@@ -263,8 +263,8 @@ async function main() {
       assert(body.models.includes("smart") && body.models.includes("fast"), "aliases");
     });
 
-    // -- 2. page load: shell, websocket, aliases, session list --------------
-    await test("page: loads, connects websocket, lists aliases and sessions", async () => {
+    // -- 2. page load: shell, websocket, aliases, empty session list -------
+    await test("page: loads, connects websocket, opens the create panel", async () => {
       await page.goto(`${base}/?token=${TOKEN}`);
       await connected(page);
       await poll(
@@ -273,23 +273,40 @@ async function main() {
       );
       const options = await page.$$eval("#model-picker option", (els) => els.map((e) => e.value));
       assert(options.includes("smart") && options.includes("fast"), `alias options: ${options}`);
-      await page.waitForSelector("#session-list .session-row .session-main", { timeout: 15_000 });
-      const sessions = await page.$$eval("#session-list .session-main", (els) => els.map((e) => e.textContent));
-      eq(sessions.length, 1, "default session present");
-      // M3 organization rows: title first (alias fallback), then the "alias · age" subtitle.
-      assert(sessions[0].startsWith("smart"), `session label: ${sessions[0]}`);
-      eq(await page.getAttribute("#input", "disabled"), null, "composer enabled");
+      // No session is minted for the visitor: the list stays empty and the
+      // create panel auto-opens, so the model is the user's choice.
+      await poll(
+        async () => page.locator("#create-panel").evaluate((el) => !el.hidden),
+        { timeout: 15_000, message: "create panel auto-opened" },
+      );
+      eq(await page.locator("#session-list .session-main").count(), 0, "no sessions yet");
+      assert(
+        (await page.getAttribute("#input", "disabled")) !== null,
+        "composer disabled without a session",
+      );
     });
 
     // -- 3. create + switch sessions ----------------------------------------
-    await test("sessions: create on second alias and switch back", async () => {
-      // The panel may be open (auto-opened) or closed; make it open.
+    await test("sessions: create on both aliases and switch back", async () => {
+      // The panel may be open (auto-opened on the empty list) or closed;
+      // make it open.
       const panelOpen = () =>
         page.locator("#create-panel").evaluate((el) => !el.hidden);
       if (!(await panelOpen().catch(() => false))) {
         await page.click("#new-session");
       }
       await poll(panelOpen, { timeout: 10_000, message: "create panel open" });
+      await page.selectOption("#model-picker", "smart");
+      await page.click("#create-session");
+      await poll(
+        async () => (await page.locator("#session-list .session-main").count()) === 1,
+        { timeout: 15_000, message: "first session appears" },
+      );
+      // A second session on the other alias.
+      if (!(await panelOpen().catch(() => false))) {
+        await page.click("#new-session");
+      }
+      await poll(panelOpen, { timeout: 10_000, message: "create panel reopened" });
       await page.selectOption("#model-picker", "fast");
       await page.click("#create-session");
       await poll(
@@ -608,6 +625,17 @@ async function main() {
     await test("guard: max-iteration turn renders terminal state", async () => {
       await page.goto(`${guardBase}/?token=${TOKEN}`);
       await connected(page);
+      // No session is minted at boot (the model is the user's choice), so
+      // create one here — the panel auto-opens on the empty list.
+      await poll(
+        async () => page.locator("#create-panel").evaluate((el) => !el.hidden),
+        { timeout: 15_000, message: "guard create panel open" },
+      );
+      await page.click("#create-session");
+      await poll(
+        async () => (await page.locator("#session-list .session-main").count()) === 1,
+        { timeout: 15_000, message: "guard session appears" },
+      );
       await sendAndWaitIdle(page, "case:loop never stop calling tools");
       // Guard terminal: chip reached guard phase, note rendered, send re-enabled.
       const note = page.locator(".note.err");

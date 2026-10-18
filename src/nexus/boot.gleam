@@ -92,38 +92,25 @@ pub fn main() -> Nil {
         )
       case supervisor.start(root) {
         Ok(_) -> {
-          // The tool registry is built once, here, from the global config —
-          // before any session exists — so the tool schema is frozen for
-          // every request the VM ever sends (M3 pre-creation requirement).
-          // The registry owns the frozen toolset and builds the agent-loop
-          // runner itself; boot only asks for the default-alias session.
-          case
-            session_registry.create(
-              process.named_subject(registry_name),
-              cfg.model_default,
-            )
-          {
-            Ok(_) -> {
-              io.println(
-                "listening on http://"
-                <> cfg.http_bind
-                <> ":"
-                <> int.to_string(cfg.http_port),
-              )
-              io.println("default model alias: " <> cfg.model_default)
-              case cfg.ui_token {
-                Some(_) -> io.println("auth: token required")
-                None -> io.println("auth: disabled (NEXUS_UI_TOKEN unset)")
-              }
-              process.sleep_forever()
-            }
-            Error(reason) -> {
-              io.println(
-                "failed to create default session: " <> string.inspect(reason),
-              )
-              halt(1)
-            }
+          // No session is minted at boot: creation is user-initiated (the
+          // sidebar's create panel auto-opens whenever no active session is
+          // selectable), so a restart never adds an empty session — and the
+          // registry's boot sweep retired any never-used leftovers from
+          // earlier runs while hydrating. The tool schema is still frozen
+          // before any session can exist: the registry built it from the
+          // global config at its own start.
+          io.println(
+            "listening on http://"
+            <> cfg.http_bind
+            <> ":"
+            <> int.to_string(cfg.http_port),
+          )
+          io.println("default model alias: " <> cfg.model_default)
+          case cfg.ui_token {
+            Some(_) -> io.println("auth: token required")
+            None -> io.println("auth: disabled (NEXUS_UI_TOKEN unset)")
           }
+          process.sleep_forever()
         }
         Error(reason) -> {
           io.println(

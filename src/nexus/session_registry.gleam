@@ -18,7 +18,11 @@
 ////
 //// Phase 2 (durable persistence): the registry hydrates the **dormant**
 //// set (stored-but-not-live sessions) from the store seam at boot and
-//// mints ids past every stored id. The first `Get` of a dormant id lazily
+//// mints ids past every stored id. Never-used sessions (system prompt
+//// only, untitled, unpinned) do not survive a boot: they are swept
+//// before hydration, so abandoned empties cannot accumulate in the
+//// sidebar — sessions exist because someone put a message in them. The
+//// first `Get` of a dormant id lazily
 //// starts a hydrated actor — the transcript is rebuilt through
 //// `nexus/transcript.new(model, system_prompt)` + the existing `append_*`
 //// functions only, so the request prefix is byte-identical across the
@@ -251,8 +255,14 @@ pub fn start_with_runner(
         Error(error) ->
           Error("session store unreachable, cannot hydrate: " <> error)
         Ok(summaries) -> {
+          // Boot sweep first: never-used sessions are deleted before the
+          // dormant set is built, so they neither list nor lazily start.
+          // The id counter below still seeds past the PRE-sweep ids — a
+          // failed delete leaves the row behind, and a fresh id must not
+          // collide with it.
+          let survivors = sweep_never_used(persistence, summaries)
           let dormant =
-            list.fold(summaries, dict.new(), fn(dormant, summary) {
+            list.fold(survivors, dict.new(), fn(dormant, summary) {
               dict.insert(dormant, summary.id, summary)
             })
           actor.initialised(State(
@@ -296,6 +306,51 @@ fn max_stored_counter(summaries: List(StoredSummary)) -> Int {
           Error(_) -> max
         }
       _ -> max
+    }
+  })
+}
+
+/// A stored session that was never used: nothing but the frozen system
+/// prompt (`message_count <= 1` — the same "no user message yet" rule the
+/// send paths use for auto-titling), never titled (auto source — a manual
+/// rename is intent, keep it), never pinned (also intent). Archiving does
+/// not protect an empty session: an archived empty is still litter.
+fn never_used(summary: StoredSummary) -> Bool {
+  summary.message_count <= 1
+  && summary.title_source == session.AutoTitle
+  && !summary.pinned
+}
+
+/// Delete every never-used stored session, returning the survivors.
+///
+/// Why a boot-time sweep: sessions used to be minted unconditionally at
+/// every server start, so restarts (and nothing else) accumulated empty
+/// rows forever. Creation is now always user-initiated, and this sweep
+/// retires whatever empties earlier runs left behind — including one
+/// created and abandoned mid-run, which is indistinguishable from those
+/// rows and costs nothing (there is no content to lose; a first message
+/// only counts once its turn committed).
+///
+/// A delete failure is logged and the session is KEPT, listed as dormant:
+/// the list then still matches the store, and the next boot retries.
+fn sweep_never_used(
+  persistence: Store,
+  summaries: List(StoredSummary),
+) -> List(StoredSummary) {
+  list.filter(summaries, fn(summary) {
+    case never_used(summary) {
+      False -> True
+      True ->
+        case persistence.delete_session(summary.id) {
+          Ok(_) -> {
+            io.println("boot sweep: deleted never-used session " <> summary.id)
+            False
+          }
+          Error(error) -> {
+            log_store_error("sweep delete " <> summary.id, error)
+            True
+          }
+        }
     }
   })
 }

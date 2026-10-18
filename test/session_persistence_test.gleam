@@ -468,8 +468,11 @@ pub fn lazy_start_is_one_shot_and_continues_ids_test() {
 fn stored(id: String) -> store.StoredSummary {
   store.StoredSummary(
     id: id,
-    title: "",
-    title_source: session.AutoTitle,
+    // Manually titled: a dormant row the boot sweep must KEEP (a rename
+    // is user intent, unlike a never-used empty). message_count stays 1 —
+    // system prompt only, consistent with the empty row list.
+    title: "stored",
+    title_source: session.ManualTitle,
     model: "alias-1",
     pinned: False,
     archived: False,
