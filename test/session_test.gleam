@@ -48,7 +48,6 @@ fn stats() -> openai.StreamStats {
     events_parsed: 7,
     decode_errors: 0,
     saw_done: True,
-    closed_after_idle_ms: Some(1),
     usage: None,
   )
 }

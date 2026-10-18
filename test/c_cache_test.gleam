@@ -77,7 +77,6 @@ fn turn(
       events_parsed: 8,
       decode_errors: 0,
       saw_done: True,
-      closed_after_idle_ms: Some(2),
       usage: usage,
     ),
   )
