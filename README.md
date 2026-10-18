@@ -10,6 +10,7 @@ table plus append-only `session_message` rows;
 hydrate-on-boot, lazy start, write-behind commits). See
 `docs/plans/mvp-requirements.md`, `docs/plans/tech-stack.md`,
 `docs/plans/m3-verification.md`, and `docs/plans/p2-verification.md`.
+The next phase is designed in `docs/plans/multi-provider.md`.
 
 ## Development
 
