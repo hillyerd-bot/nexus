@@ -4,8 +4,8 @@
 //// Design (from the M0 plan, §5):
 ////
 //// - Requests are always built through `nexus/transcript.to_request`, so
-////   every caller (spikes A/B/C, and from M1 the session server) encodes
-////   identically — the precondition for spike C's byte-stability evidence.
+////   every caller (the TTFT audit tool, and the session server) encodes
+////   identically — the precondition for the audit's byte-stability evidence.
 //// - Streaming uses hackney's async messages directly so the request can set
 ////   `recv_timeout` above `NEXUS_STREAM_IDLE_TIMEOUT_MS`; the buffered
 ////   helpers otherwise hard-wire hackney's five-second default and close
@@ -23,7 +23,7 @@ import gleam/bytes_tree
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
 import gleam/http.{type Method}
-import gleam/http/request.{type Request}
+import gleam/http/request.{type Request, Request}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -85,11 +85,42 @@ pub type StreamError {
   Decode(reason: String)
 }
 
+/// Runtime identity of one OpenAI-compatible endpoint: where to send, how
+/// to authenticate, and the stream timeouts to enforce. Deliberately
+/// narrow — callers holding the full server `Config` derive it via
+/// `endpoint_from_config`, while standalone tools (the TTFT audit
+/// harness) build it from their own configuration and never touch the
+/// server config surface.
+pub type Endpoint {
+  Endpoint(
+    /// OpenAI-compatible base URL including the `/v1` suffix.
+    base_url: String,
+    /// Bearer key; `None` targets keyless local endpoints.
+    api_key: Option(String),
+    /// SSE first-response (status/headers) timeout in ms.
+    sse_first_response_timeout_ms: Int,
+    /// Receive timeout between SSE events mid-stream, in ms.
+    stream_idle_timeout_ms: Int,
+  )
+}
+
+/// Derive the transport endpoint from the server configuration.
+pub fn endpoint_from_config(cfg: Config) -> Endpoint {
+  Endpoint(
+    base_url: cfg.base_url,
+    api_key: Some(cfg.api_key),
+    sse_first_response_timeout_ms: cfg.sse_first_response_timeout_ms,
+    stream_idle_timeout_ms: cfg.stream_idle_timeout_ms,
+  )
+}
+
 /// Buffered `GET /v1/models` — doubles as preflight (validates URL + auth
 /// with a real status code) and as the Bifrost sanity check.
-pub fn list_models(cfg: Config) -> Result(List(String), StreamError) {
+pub fn list_models(endpoint: Endpoint) -> Result(List(String), StreamError) {
   use <- ensure_boot()
-  let req = model.list_request(to_openai_config(cfg))
+  let req =
+    model.list_request(to_openai_config(endpoint))
+    |> drop_empty_bearer(endpoint)
   use response <- result.try(
     hackney.send(req) |> result.map_error(fn(e) { Transport(send_error(e)) }),
   )
@@ -127,7 +158,7 @@ fn id_decoder() -> decode.Decoder(String) {
 /// Stream a chat completion for `transcript`, forwarding typed events to
 /// `on_event` as they arrive, and returning aggregate stats on success.
 pub fn stream(
-  cfg: Config,
+  endpoint: Endpoint,
   transcript: Transcript,
   opts: Options,
   on_event: fn(StreamEvent) -> Nil,
@@ -136,9 +167,15 @@ pub fn stream(
   // trapping and the selector receive still apply (verdict finding 9
   // hardening — a crashing SSE handler becomes a typed error instead of an
   // untrapped exit killing this process), but cancellation itself never
-  // fires, so spikes A/B/C keep their exact previous semantics.
+  // fires, so the audit tool keeps its exact previous semantics.
   case
-    stream_with_cancel(cfg, transcript, opts, on_event, process.new_subject())
+    stream_with_cancel(
+      endpoint,
+      transcript,
+      opts,
+      on_event,
+      process.new_subject(),
+    )
   {
     Completed(stats) -> Ok(stats)
     Cancelled -> Error(Transport("cancelled without a cancel signal (bug)"))
@@ -159,7 +196,7 @@ pub type StreamOutcome {
 /// actor down, and returns `Cancelled`. The cancel subject must be owned by
 /// the process calling this function (selector receive semantics).
 pub fn stream_with_cancel(
-  cfg: Config,
+  endpoint: Endpoint,
   transcript: Transcript,
   opts: Options,
   on_event: fn(StreamEvent) -> Nil,
@@ -169,10 +206,11 @@ pub fn stream_with_cancel(
     Ok(_) -> {
       let req =
         chat.create_request(
-          to_openai_config(cfg),
+          to_openai_config(endpoint),
           transcript.to_request(transcript, opts),
         )
-      stream_request(cfg, req, on_event, cancel)
+        |> drop_empty_bearer(endpoint)
+      stream_request(endpoint, req, on_event, cancel)
     }
     Error(reason) ->
       Failed(Transport("failed to start hackney: " <> string.inspect(reason)))
@@ -189,7 +227,7 @@ fn hackney_stream_start(
 ) -> Result(hackney.HackneyResponse, hackney.Error)
 
 fn stream_request(
-  cfg: Config,
+  endpoint: Endpoint,
   req: Request(String),
   on_event: fn(StreamEvent) -> Nil,
   cancel: Subject(Nil),
@@ -204,7 +242,7 @@ fn stream_request(
       // recv_timeout option. Supply it here so
       // a reasoning model can remain silent for the configured idle interval
       // without hackney's five-second default closing the socket.
-      let hackney_timeout = cfg.stream_idle_timeout_ms + 5000
+      let hackney_timeout = endpoint.stream_idle_timeout_ms + 5000
       case
         hackney_stream_start(
           bytes_req.method,
@@ -227,8 +265,8 @@ fn stream_request(
           let outcome =
             raw_stream_loop(
               selector,
-              cfg.sse_first_response_timeout_ms,
-              cfg.stream_idle_timeout_ms,
+              endpoint.sse_first_response_timeout_ms,
+              endpoint.stream_idle_timeout_ms,
               on_event,
               False,
               "",
@@ -429,10 +467,10 @@ pub fn handle_chunk(
   let acc = Acc(..acc, events_parsed: acc.events_parsed + 1)
   // Usage may ride on any chunk (typically the final one, and usually
   // only when the backend is asked via stream_options.include_usage).
-  // Forward it as an event and keep the latest: spike C's cached_tokens
-  // evidence depends on this (verdict doc finding 8). Regression-guarded
-  // by test/openai_test.gleam after the PR #3 review caught it being
-  // silently dropped.
+  // Forward it as an event and keep the latest: the audit tool's
+  // cached_tokens evidence depends on this (verdict doc finding 8).
+  // Regression-guarded by test/openai_test.gleam after the PR #3 review
+  // caught it being silently dropped.
   let acc = case chunk.usage {
     Some(usage) -> {
       on_event(Usage(usage))
@@ -526,8 +564,28 @@ fn finish_stream(
   }
 }
 
-fn to_openai_config(cfg: Config) -> OpenAiConfig {
-  oai_config.new(cfg.api_key) |> oai_config.with_api_base(cfg.base_url)
+fn to_openai_config(endpoint: Endpoint) -> OpenAiConfig {
+  oai_config.new(option.unwrap(endpoint.api_key, ""))
+  |> oai_config.with_api_base(endpoint.base_url)
+}
+
+/// glopenai's request builder always prepends `authorization: Bearer
+/// <api_key>` — with no key configured that would put an empty-valued
+/// `Authorization` header on the wire, which some servers and
+/// intermediaries reject. For keyless endpoints, drop the header entirely
+/// (verified live against a keyless vLLM: both shapes are accepted, but a
+/// missing header is the unambiguous one). Pure — offline-testable.
+pub fn drop_empty_bearer(req: Request(a), endpoint: Endpoint) -> Request(a) {
+  case endpoint.api_key {
+    Some(_) -> req
+    None ->
+      Request(
+        ..req,
+        headers: list.filter(req.headers, fn(header) {
+          header.0 != "authorization"
+        }),
+      )
+  }
 }
 
 fn ensure_boot(next: fn() -> Result(a, StreamError)) -> Result(a, StreamError) {

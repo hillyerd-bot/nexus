@@ -26,8 +26,6 @@ fn test_config() -> config.Config {
     model_default: "default-alias",
     sse_first_response_timeout_ms: 1000,
     stream_idle_timeout_ms: 1000,
-    spike_c_turns: 20,
-    spike_c_repeats: 5,
     http_bind: "127.0.0.1",
     http_port: 8080,
     ui_token: None,

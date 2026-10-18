@@ -1,11 +1,16 @@
-//// Spike C — KV-cache audit harness.
+//// Warm/cold TTFT audit harness.
 ////
 //// Each repeat uses a unique nonce in an otherwise deterministic system
 //// prompt. Request one is cold; requests 10–20 are warm samples. The
 //// assistant messages recorded in the transcript are fixed seed-generated
 //// answers, not prior network responses, so every prefix remains immutable
 //// and byte-stable.
+////
+//// Configuration comes from `audit/config` (NEXUS_AUDIT_* env vars), not
+//// the server's `nexus/config` — this is a standalone operator tool, kept
+//// deliberately decoupled from the server config surface.
 
+import audit/config.{type AuditConfig}
 import gleam/float
 import gleam/int
 import gleam/io
@@ -14,20 +19,19 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import glopenai/shared.{type CompletionUsage}
-import nexus/config.{type Config}
 import nexus/openai
 import nexus/timing
 import nexus/transcript
 
 const stream_attempts = 3
 
-@external(erlang, "nexus_spike_ffi", "halt")
+@external(erlang, "nexus_audit_ffi", "halt")
 fn halt(code: Int) -> a
 
-@external(erlang, "nexus_spike_ffi", "argv")
+@external(erlang, "nexus_audit_ffi", "argv")
 fn argv() -> List(String)
 
-@external(erlang, "nexus_spike_ffi", "unique_integer")
+@external(erlang, "nexus_audit_ffi", "unique_integer")
 fn unique_integer() -> Int
 
 pub type TurnResult {
@@ -39,12 +43,22 @@ pub type TurnResult {
   )
 }
 
+/// The transport endpoint under audit, derived from the audit config.
+fn endpoint(cfg: AuditConfig) -> openai.Endpoint {
+  openai.Endpoint(
+    base_url: cfg.base_url,
+    api_key: cfg.api_key,
+    sse_first_response_timeout_ms: cfg.sse_first_response_timeout_ms,
+    stream_idle_timeout_ms: cfg.stream_idle_timeout_ms,
+  )
+}
+
 fn stream_with_retries(
-  cfg: Config,
+  ep: openai.Endpoint,
   requested: transcript.Transcript,
   attempt: Int,
 ) -> Result(openai.StreamStats, openai.StreamError) {
-  let outcome = openai.stream(cfg, requested, options(), fn(_) { Nil })
+  let outcome = openai.stream(ep, requested, options(), fn(_) { Nil })
   case outcome, attempt < stream_attempts {
     Ok(stats), _ -> Ok(stats)
     Error(openai.Transport(reason)), True -> {
@@ -54,14 +68,14 @@ fn stream_with_retries(
         <> " reason="
         <> reason,
       )
-      stream_with_retries(cfg, requested, attempt + 1)
+      stream_with_retries(ep, requested, attempt + 1)
     }
     Error(error), _ -> Error(error)
   }
 }
 
-fn report_invalid_results(cfg: Config, results: List(TurnResult)) -> Nil {
-  let expected = cfg.spike_c_turns * cfg.spike_c_repeats
+fn report_invalid_results(cfg: AuditConfig, results: List(TurnResult)) -> Nil {
+  let expected = cfg.turns * cfg.repeats
   let missing_ttft =
     list.filter(results, fn(result) { result.stats.ttft_ms == None })
   let without_tokens =
@@ -106,20 +120,20 @@ pub fn main() -> Nil {
       case csv_mode {
         True -> halt(2)
         False -> {
-          io.println("=== spike c: cache ===")
+          io.println("=== ttft audit ===")
           io.println("config error: " <> message)
           halt(2)
         }
       }
     Ok(cfg) ->
-      case cfg.spike_c_turns < 20 || cfg.spike_c_repeats < 1 {
+      case cfg.turns < 20 || cfg.repeats < 1 {
         True ->
           case csv_mode {
             True -> halt(2)
             False -> {
-              io.println("=== spike c: cache ===")
+              io.println("=== ttft audit ===")
               io.println(
-                "config error: NEXUS_SPIKE_C_TURNS must be >= 20 and NEXUS_SPIKE_C_REPEATS must be >= 1",
+                "config error: NEXUS_AUDIT_TURNS must be >= 20 and NEXUS_AUDIT_REPEATS must be >= 1",
               )
               halt(2)
             }
@@ -133,12 +147,12 @@ pub fn main() -> Nil {
   }
 }
 
-fn run_report(cfg: Config) -> Nil {
-  io.println("=== spike c: cache ===")
+fn run_report(cfg: AuditConfig) -> Nil {
+  io.println("=== ttft audit ===")
   io.println("base_url=" <> cfg.base_url)
-  io.println("model=" <> cfg.model_default)
-  io.println("turns=" <> int.to_string(cfg.spike_c_turns))
-  io.println("repeats=" <> int.to_string(cfg.spike_c_repeats))
+  io.println("model=" <> cfg.model)
+  io.println("turns=" <> int.to_string(cfg.turns))
+  io.println("repeats=" <> int.to_string(cfg.repeats))
   let collected = collect_results(cfg)
   case valid_results(cfg, collected) {
     False -> {
@@ -152,7 +166,7 @@ fn run_report(cfg: Config) -> Nil {
         Ok(metrics) -> {
           report_metrics(metrics)
           report_usage_evidence(collected)
-          io.println("=== spike c complete ===")
+          io.println("=== ttft audit complete ===")
         }
         Error(reason) -> {
           io.println("metrics error: " <> reason)
@@ -163,7 +177,7 @@ fn run_report(cfg: Config) -> Nil {
   }
 }
 
-fn run_csv(cfg: Config) -> Nil {
+fn run_csv(cfg: AuditConfig) -> Nil {
   let collected = collect_results(cfg)
   case valid_results(cfg, collected) {
     False -> halt(1)
@@ -174,16 +188,17 @@ fn run_csv(cfg: Config) -> Nil {
   }
 }
 
-fn collect_results(cfg: Config) -> List(TurnResult) {
-  int.range(1, cfg.spike_c_repeats + 1, [], list.prepend)
+fn collect_results(cfg: AuditConfig) -> List(TurnResult) {
+  int.range(1, cfg.repeats + 1, [], list.prepend)
   |> list.reverse
   |> list.flat_map(fn(session) { run_session(cfg, session) })
 }
 
-fn run_session(cfg: Config, session: Int) -> List(TurnResult) {
+fn run_session(cfg: AuditConfig, session: Int) -> List(TurnResult) {
+  let ep = endpoint(cfg)
   let nonce = unique_integer()
-  let initial = transcript.new(cfg.model_default, system_prompt(nonce))
-  int.range(1, cfg.spike_c_turns + 1, [], list.prepend)
+  let initial = transcript.new(cfg.model, system_prompt(nonce))
+  int.range(1, cfg.turns + 1, [], list.prepend)
   |> list.reverse
   |> list.fold(#(initial, []), fn(state, turn) {
     let #(current, results) = state
@@ -198,8 +213,8 @@ fn run_session(cfg: Config, session: Int) -> List(TurnResult) {
       <> " started",
     )
     let outcome = case turn {
-      1 -> openai.stream(cfg, requested, options(), fn(_) { Nil })
-      _ -> stream_with_retries(cfg, requested, 1)
+      1 -> openai.stream(ep, requested, options(), fn(_) { Nil })
+      _ -> stream_with_retries(ep, requested, 1)
     }
     case outcome {
       Ok(stats) -> #(
@@ -280,8 +295,8 @@ fn median_for(
   })
 }
 
-pub fn valid_results(cfg: Config, results: List(TurnResult)) -> Bool {
-  list.length(results) == cfg.spike_c_turns * cfg.spike_c_repeats
+pub fn valid_results(cfg: AuditConfig, results: List(TurnResult)) -> Bool {
+  list.length(results) == cfg.turns * cfg.repeats
   && list.all(results, fn(result) {
     result.stats.ttft_ms != None && result.stats.token_deltas > 0
   })
@@ -303,7 +318,7 @@ pub fn system_prompt(nonce: Int) -> String {
     ]
     |> string.join(". ")
   let discipline = list.repeat(discipline, 180) |> string.join(". ")
-  "You are nexus spike C, a deterministic cache audit assistant. Session nonce: "
+  "You are the nexus TTFT audit assistant, deterministic by design. Session nonce: "
   <> int.to_string(nonce)
   <> ". Cache discipline: "
   <> discipline

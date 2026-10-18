@@ -1,18 +1,18 @@
+import audit/config
+import audit/ttft
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleeunit/should
 import glopenai/shared
-import nexus/config
 import nexus/openai
 import nexus/transcript
-import spikes/c_cache
 
 pub fn deterministic_transcript_test() {
   let body =
-    c_cache.system_prompt(123)
+    ttft.system_prompt(123)
     |> transcript.new("test-model", _)
-    |> transcript.append_user(c_cache.user_prompt(1))
+    |> transcript.append_user(ttft.user_prompt(1))
     |> transcript.request_body(transcript.default_options())
   should.be_true(string.contains(body, "Session nonce: 123"))
   should.be_true(string.contains(body, "Cache audit turn"))
@@ -20,14 +20,14 @@ pub fn deterministic_transcript_test() {
 
 pub fn summarize_cold_and_warm_test() {
   let metrics =
-    c_cache.summarize([
+    ttft.summarize([
       turn(1, 1, 100, None),
       turn(1, 10, 20, usage(75)),
       turn(1, 11, 40, usage(90)),
       turn(2, 1, 200, usage(0)),
       turn(2, 10, 30, usage(120)),
     ])
-    |> result.unwrap(c_cache.Metrics(0.0, 0.0, 0.0, False))
+    |> result.unwrap(ttft.Metrics(0.0, 0.0, 0.0, False))
   should.equal(metrics.cold_median_ms, 150.0)
   should.equal(metrics.warm_median_ms, 30.0)
   should.equal(metrics.ratio, 0.2)
@@ -36,27 +36,27 @@ pub fn summarize_cold_and_warm_test() {
 
 pub fn csv_row_test() {
   should.equal(
-    c_cache.csv_header(),
+    ttft.csv_header(),
     "session,turn,ttft_ms,duration_ms,token_deltas,events_parsed,prompt_tokens,cached_tokens,prompt_tokens_estimated,tokens_per_second",
   )
   should.equal(
-    c_cache.csv_row(turn(1, 10, 20, usage(75))),
+    ttft.csv_row(turn(1, 10, 20, usage(75))),
     "1,10,20,100,4,8,100,75,100,40.0",
   )
 }
 
 pub fn validity_rejects_incomplete_streams_test() {
-  let assert Ok(base) =
-    config.from_env(fn(name) {
-      case name {
-        "BIFROST_BASE_URL" -> Ok("http://bifrost.test/v1")
-        "BIFROST_API_KEY" -> Ok("sk-test")
-        "NEXUS_MODEL_DEFAULT" -> Ok("test-model")
-        _ -> Error(Nil)
-      }
-    })
-  let cfg = config.Config(..base, spike_c_turns: 20, spike_c_repeats: 1)
-  should.be_false(c_cache.valid_results(cfg, [turn(1, 1, 100, usage(0))]))
+  let cfg =
+    config.AuditConfig(
+      base_url: "http://bifrost.test/v1",
+      api_key: Some("sk-test"),
+      model: "test-model",
+      turns: 20,
+      repeats: 1,
+      sse_first_response_timeout_ms: 30_000,
+      stream_idle_timeout_ms: 120_000,
+    )
+  should.be_false(ttft.valid_results(cfg, [turn(1, 1, 100, usage(0))]))
 }
 
 fn turn(
@@ -64,8 +64,8 @@ fn turn(
   turn_number: Int,
   ttft_ms: Int,
   usage: option.Option(shared.CompletionUsage),
-) -> c_cache.TurnResult {
-  c_cache.TurnResult(
+) -> ttft.TurnResult {
+  ttft.TurnResult(
     session: session,
     turn: turn_number,
     prompt_chars: 400,

@@ -1,8 +1,8 @@
-//// Environment-driven configuration for the web server and the
-//// surviving audit tool (spikes/c_cache).
+//// Environment-driven configuration for the web server.
 ////
 //// Misconfiguration must fail loudly *before* any network call, so `load`
-//// validates and parses everything up front.
+//// validates and parses everything up front. The TTFT audit tool has its
+//// own loader (`audit/config`) and must not depend on this surface.
 
 import envoy
 import gleam/int
@@ -21,10 +21,6 @@ pub type Config {
     sse_first_response_timeout_ms: Int,
     /// Our own receive timeout between SSE events mid-stream, in ms.
     stream_idle_timeout_ms: Int,
-    /// Spike C: turns per measured session.
-    spike_c_turns: Int,
-    /// Spike C: session repeats (each repeat is a fresh cold start).
-    spike_c_repeats: Int,
     /// M1 web server bind address (loopback by default, PRD hard req. 5).
     http_bind: String,
     /// M1 web server port.
@@ -85,8 +81,6 @@ pub fn from_env(
     "NEXUS_STREAM_IDLE_TIMEOUT_MS",
     120_000,
   ))
-  use turns <- result.try(optional_int(get, "NEXUS_SPIKE_C_TURNS", 20))
-  use repeats <- result.try(optional_int(get, "NEXUS_SPIKE_C_REPEATS", 5))
   use http_port <- result.try(optional_int(get, "NEXUS_HTTP_PORT", 8080))
   use http_bind <- result.try(optional_string_or(
     get,
@@ -142,8 +136,6 @@ pub fn from_env(
     model_default: model_default,
     sse_first_response_timeout_ms: first_response_ms,
     stream_idle_timeout_ms: idle_ms,
-    spike_c_turns: turns,
-    spike_c_repeats: repeats,
     http_bind: http_bind,
     http_port: http_port,
     ui_token: optional_string(get, "NEXUS_UI_TOKEN"),

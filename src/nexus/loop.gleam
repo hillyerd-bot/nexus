@@ -78,8 +78,9 @@ pub type LoopOutcome {
 
 /// Production stream seam over the transport module.
 pub fn bifrost_stream(cfg: Config) -> StreamFn {
+  let endpoint = openai.endpoint_from_config(cfg)
   fn(tr, opts, on_event, cancel) {
-    openai.stream_with_cancel(cfg, tr, opts, on_event, cancel)
+    openai.stream_with_cancel(endpoint, tr, opts, on_event, cancel)
   }
 }
 

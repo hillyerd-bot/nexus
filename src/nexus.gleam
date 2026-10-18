@@ -5,7 +5,7 @@
 //// hydrated from the store, the Lustre server-component runtime, and a
 //// Mist server at the bound address serving the chat UI over `/ws` plus
 //// the JSON scripting API. The warm/cold TTFT audit tool remains via
-//// `gleam run -m spikes/c_cache`.
+//// `gleam run -m audit/ttft`.
 
 import nexus/boot
 

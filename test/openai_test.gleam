@@ -3,9 +3,10 @@
 ////
 //// The usage-forwarding case is the regression guard for the PR #3 review
 //// finding: `chunk.usage` was silently dropped (the `Usage` event was
-//// declared but never emitted), which would have lost spike C's
+//// declared but never emitted), which would have lost the audit tool's
 //// cached_tokens evidence.
 
+import gleam/http/request
 import gleam/option.{type Option, None, Some}
 import gleeunit/should
 import glopenai/chat
@@ -53,6 +54,39 @@ fn acc() -> openai.Acc {
   )
 }
 
+fn keyless_endpoint() -> openai.Endpoint {
+  openai.Endpoint(
+    base_url: "http://dgx.test/v1",
+    api_key: None,
+    sse_first_response_timeout_ms: 30_000,
+    stream_idle_timeout_ms: 120_000,
+  )
+}
+
+fn keyed_endpoint() -> openai.Endpoint {
+  openai.Endpoint(..keyless_endpoint(), api_key: Some("sk-test"))
+}
+
+pub fn drop_empty_bearer_removes_header_for_keyless_test() {
+  let req =
+    request.new()
+    |> request.set_header("authorization", "Bearer ")
+    |> request.set_header("content-type", "application/json")
+    |> openai.drop_empty_bearer(keyless_endpoint())
+  request.get_header(req, "authorization") |> should.be_error
+  request.get_header(req, "content-type")
+  |> should.equal(Ok("application/json"))
+}
+
+pub fn drop_empty_bearer_keeps_header_with_key_test() {
+  let req =
+    request.new()
+    |> request.set_header("authorization", "Bearer sk-test")
+    |> openai.drop_empty_bearer(keyed_endpoint())
+  request.get_header(req, "authorization")
+  |> should.equal(Ok("Bearer sk-test"))
+}
+
 fn usage_with(cached cached: Int) -> shared.CompletionUsage {
   shared.CompletionUsage(
     prompt_tokens: 100,
@@ -90,7 +124,7 @@ pub fn usage_is_forwarded_not_dropped_test() {
       fn(_) { Nil },
     )
   // The accumulator (and thus StreamStats) must carry the usage block —
-  // this is spike C's secondary cache-hit signal.
+  // this is the audit tool's secondary cache-hit signal.
   out.usage |> should.equal(Some(usage))
   out.events_parsed |> should.equal(1)
   out.token_deltas |> should.equal(0)

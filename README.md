@@ -177,19 +177,22 @@ headers.
 
 ## Audit tool
 
-`spikes/c_cache` is the keep-forever warm/cold TTFT audit harness (the
+`audit/ttft` is the keep-forever warm/cold TTFT audit harness (the
 M0 evidence runners it grew beside are gone; this one stays). It is a
 live-checkpoint activity, never CI:
 
 ```sh
-gleam run -m spikes/c_cache                # warm/cold TTFT harness
-gleam run -m spikes/c_cache -- --csv       # machine-readable rows
+gleam run -m audit/ttft                # warm/cold TTFT harness
+gleam run -m audit/ttft -- --csv       # machine-readable rows
 ```
 
-It reads `BIFROST_BASE_URL`, `BIFROST_API_KEY`, `NEXUS_MODEL_DEFAULT`
-plus `NEXUS_SPIKE_C_TURNS` (20), `NEXUS_SPIKE_C_REPEATS` (5), and the
-stream timeouts `NEXUS_SSE_FIRST_RESPONSE_TIMEOUT_MS` (30000) /
-`NEXUS_STREAM_IDLE_TIMEOUT_MS` (120000).
+It is a standalone operator tool with its own configuration (`audit/config`),
+deliberately decoupled from the server's env surface. It reads
+`NEXUS_AUDIT_BASE_URL` (required, including `/v1`), `NEXUS_AUDIT_MODEL`
+(required), optional `NEXUS_AUDIT_API_KEY` (unset targets keyless local
+endpoints), plus `NEXUS_AUDIT_TURNS` (20), `NEXUS_AUDIT_REPEATS` (5), and
+the stream timeouts `NEXUS_AUDIT_SSE_FIRST_RESPONSE_TIMEOUT_MS` (30000) /
+`NEXUS_AUDIT_STREAM_IDLE_TIMEOUT_MS` (120000).
 
 ## Architecture
 
@@ -210,7 +213,8 @@ stream timeouts `NEXUS_SSE_FIRST_RESPONSE_TIMEOUT_MS` (30000) /
 - `nexus/ui`, `nexus/ui_runtime` — the server-component model/view and the
   WebSocket + runtime glue
 - `nexus/boot` — supervision tree and startup
-- `spikes/c_cache` — the warm/cold TTFT audit tool
+- `audit/ttft`, `audit/config` — the warm/cold TTFT audit tool and its
+  standalone configuration loader
 
 KV-cache contract (PRD rules 1–6) is enforced structurally: append-only
 transcript, one encode path, and no volatile session ID or metrics above the

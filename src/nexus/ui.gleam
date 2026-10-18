@@ -972,7 +972,7 @@ fn metrics_for(
 
 fn aliases_effect(model: Model) -> Effect(Msg) {
   effect.from(fn(dispatch) {
-    case openai.list_models(model.cfg) {
+    case openai.list_models(openai.endpoint_from_config(model.cfg)) {
       Ok(aliases) -> dispatch(AliasesLoaded(aliases))
       Error(_) -> dispatch(AliasesFailed)
     }

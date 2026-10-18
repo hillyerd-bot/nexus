@@ -12,8 +12,6 @@ fn set_all(pairs: List(#(String, String))) -> Nil {
   envoy.unset("NEXUS_MODEL_DEFAULT")
   envoy.unset("NEXUS_SSE_FIRST_RESPONSE_TIMEOUT_MS")
   envoy.unset("NEXUS_STREAM_IDLE_TIMEOUT_MS")
-  envoy.unset("NEXUS_SPIKE_C_TURNS")
-  envoy.unset("NEXUS_SPIKE_C_REPEATS")
   envoy.unset("NEXUS_HTTP_BIND")
   envoy.unset("NEXUS_HTTP_PORT")
   envoy.unset("NEXUS_UI_TOKEN")
@@ -65,8 +63,6 @@ pub fn load_defaults_test() {
   cfg.model_default |> should.equal("vllm-alias")
   cfg.sse_first_response_timeout_ms |> should.equal(30_000)
   cfg.stream_idle_timeout_ms |> should.equal(120_000)
-  cfg.spike_c_turns |> should.equal(20)
-  cfg.spike_c_repeats |> should.equal(5)
   cfg.http_bind |> should.equal("127.0.0.1")
   cfg.http_port |> should.equal(8080)
   cfg.ui_token |> should.equal(None)
@@ -80,8 +76,6 @@ pub fn load_overrides_and_trims_test() {
     #("NEXUS_MODEL_DEFAULT", "m"),
     #("NEXUS_SSE_FIRST_RESPONSE_TIMEOUT_MS", "60000"),
     #("NEXUS_STREAM_IDLE_TIMEOUT_MS", "5000"),
-    #("NEXUS_SPIKE_C_TURNS", "8"),
-    #("NEXUS_SPIKE_C_REPEATS", "3"),
     #("NEXUS_HTTP_BIND", "0.0.0.0"),
     #("NEXUS_HTTP_PORT", "9000"),
     #("NEXUS_UI_TOKEN", "sekrit"),
@@ -92,8 +86,6 @@ pub fn load_overrides_and_trims_test() {
   cfg.base_url |> should.equal("https://bifrost.example/v1")
   cfg.sse_first_response_timeout_ms |> should.equal(60_000)
   cfg.stream_idle_timeout_ms |> should.equal(5000)
-  cfg.spike_c_turns |> should.equal(8)
-  cfg.spike_c_repeats |> should.equal(3)
   cfg.http_bind |> should.equal("0.0.0.0")
   cfg.http_port |> should.equal(9000)
   cfg.ui_token |> should.equal(Some("sekrit"))

@@ -1,4 +1,4 @@
-//// Pure accumulator for streamed native tool-call deltas (spike B).
+//// Pure accumulator for streamed native tool-call deltas.
 ////
 //// OpenAI-compatible backends stream tool calls as `tool_calls` chunks on
 //// the delta, keyed by `index`: the first chunk usually carries `id` and
