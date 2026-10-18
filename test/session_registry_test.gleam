@@ -15,6 +15,7 @@ import nexus/openai
 import nexus/session
 import nexus/session_registry
 import nexus/store
+import nexus/timing
 import nexus/transcript
 import store_mock
 
@@ -520,6 +521,30 @@ fn seed(
   archived: Bool,
   message_count: Int,
 ) -> Nil {
+  seed_at(
+    seam,
+    id,
+    title,
+    title_source,
+    pinned,
+    archived,
+    message_count,
+    1_700_000_000,
+  )
+}
+
+/// Like `seed`, with an explicit `last_active_at` (epoch seconds) so the
+/// sweep's grace window can be exercised.
+fn seed_at(
+  seam: store.Store,
+  id: String,
+  title: String,
+  title_source: session.TitleSource,
+  pinned: Bool,
+  archived: Bool,
+  message_count: Int,
+  last_active_at: Int,
+) -> Nil {
   let assert Ok(Nil) =
     seam.insert_session(
       store.StoredSummary(
@@ -530,8 +555,8 @@ fn seed(
         pinned: pinned,
         archived: archived,
         tags: [],
-        created_at: 1_700_000_000,
-        last_active_at: 1_700_000_000,
+        created_at: last_active_at,
+        last_active_at: last_active_at,
         message_count: message_count,
       ),
       "test system prompt",
@@ -546,32 +571,65 @@ fn listed_ids(registry: process.Subject(session_registry.Msg)) -> List(String) {
 }
 
 /// The litter older boots left behind — empty (system-prompt-only),
-/// auto-titled, unpinned, archived or not — is swept at boot. Anything
-/// with a user message, a manual rename, or a pin survives.
+/// auto-titled, unpinned, archived or not — is swept at boot, in ONE
+/// bulk prune. Anything with a user message, a manual rename, a pin, or
+/// an empty session FRESHER than the grace window survives: that last
+/// one may belong to another concurrently-running server's live actor.
 pub fn boot_sweep_deletes_never_used_sessions_test() {
   let mock = store_mock.start()
   let seam = store_mock.seam(mock)
-  // Swept: never-used rows from earlier runs.
+  // Swept: stale never-used rows from earlier runs.
   seed(seam, "s1", "", session.AutoTitle, False, False, 1)
   seed(seam, "s2", "", session.AutoTitle, False, True, 1)
-  // Kept: used, manually renamed, pinned.
+  // Kept: used, manually renamed, pinned…
   seed(seam, "s3", "hello world", session.AutoTitle, False, False, 3)
   seed(seam, "s4", "keep me", session.ManualTitle, False, False, 1)
   seed(seam, "s5", "", session.AutoTitle, True, False, 1)
+  // …and a never-used session created moments ago (grace window).
+  seed_at(
+    seam,
+    "s6",
+    "",
+    session.AutoTitle,
+    False,
+    False,
+    1,
+    timing.wall_now_s(),
+  )
 
   let registry = start_registry_over(seam)
-  listed_ids(registry) |> should.equal(["s3", "s4", "s5"])
+  listed_ids(registry) |> should.equal(["s3", "s4", "s5", "s6"])
 
   let swept =
     store_mock.events(mock)
     |> list.filter_map(fn(event) {
       case event {
-        store_mock.EvDeleteSession(id) -> Ok(id)
+        store_mock.EvPruneNeverUsed(ids) -> Ok(ids)
         _ -> Error(Nil)
       }
     })
-    |> list.sort(string.compare)
+    |> list.flatten
   swept |> should.equal(["s1", "s2"])
+}
+
+/// A never-used row inside the grace window is swept by a LATER boot,
+/// once it is past the window.
+pub fn boot_sweep_takes_stale_empties_after_grace_test() {
+  let mock = store_mock.start()
+  let seam = store_mock.seam(mock)
+  seed_at(
+    seam,
+    "s1",
+    "",
+    session.AutoTitle,
+    False,
+    False,
+    1,
+    timing.wall_now_s() - 3600,
+  )
+
+  let registry = start_registry_over(seam)
+  listed_ids(registry) |> should.equal([])
 }
 
 /// Minted ids seed past PRE-sweep stored ids: a swept id is never reused,
@@ -587,13 +645,13 @@ pub fn create_after_sweep_mints_past_swept_ids_test() {
   record.id |> should.equal("s2")
 }
 
-/// A sweep delete that fails keeps the session listed (dormant): the
-/// sidebar must never show fewer rows than the store holds, and the next
-/// boot retries the sweep.
-pub fn boot_sweep_delete_failure_keeps_session_test() {
+/// A prune that fails keeps every session listed (dormant): the sidebar
+/// must never show fewer rows than the store holds, and the next boot
+/// retries the sweep.
+pub fn boot_sweep_prune_failure_keeps_session_test() {
   let mock = store_mock.start()
   let seam =
-    store.Store(..store_mock.seam(mock), delete_session: fn(_) {
+    store.Store(..store_mock.seam(mock), prune_never_used: fn() {
       Error("disk full")
     })
   seed(seam, "s1", "", session.AutoTitle, False, False, 1)

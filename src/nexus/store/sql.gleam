@@ -450,6 +450,66 @@ order by m.seq
   |> pog.execute(db)
 }
 
+/// A row you get from running the `prune_never_used` query
+/// defined in `./src/nexus/store/sql/prune_never_used.sql`.
+///
+/// > 🐿️ This type definition was generated automatically using v4.7.0 of the
+/// > [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub type PruneNeverUsedRow {
+  PruneNeverUsedRow(id: String)
+}
+
+/// Boot sweep: hard-delete never-used sessions older than the grace
+/// window, in ONE statement (bounded startup work — the registry runs
+/// this inside its actor-initialiser deadline).
+///
+/// Never-used = holds nothing but the frozen system prompt
+/// (message_count <= 1 — the same "no user message yet" rule the send
+/// paths use for auto-titling), never titled (title_source 'auto'; a
+/// manual rename is intent and survives), never pinned (also intent).
+/// Archived or not: an archived empty is still litter.
+///
+/// The grace window protects a session another concurrently-running
+/// server created moments ago and still holds live — it stays empty
+/// until its first turn commits. 15 minutes is far past any first turn.
+///
+/// > 🐿️ This function was generated automatically using v4.7.0 of
+/// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub fn prune_never_used(
+  db: pog.Connection,
+) -> Result(pog.Returned(PruneNeverUsedRow), pog.QueryError) {
+  let decoder = {
+    use id <- decode.field(0, decode.string)
+    decode.success(PruneNeverUsedRow(id:))
+  }
+
+  "-- Boot sweep: hard-delete never-used sessions older than the grace
+-- window, in ONE statement (bounded startup work — the registry runs
+-- this inside its actor-initialiser deadline).
+--
+-- Never-used = holds nothing but the frozen system prompt
+-- (message_count <= 1 — the same \"no user message yet\" rule the send
+-- paths use for auto-titling), never titled (title_source 'auto'; a
+-- manual rename is intent and survives), never pinned (also intent).
+-- Archived or not: an archived empty is still litter.
+--
+-- The grace window protects a session another concurrently-running
+-- server created moments ago and still holds live — it stays empty
+-- until its first turn commits. 15 minutes is far past any first turn.
+delete from session
+where message_count <= 1
+  and title_source = 'auto'
+  and pinned = false
+  and last_active_at < now() - interval '15 minutes'
+returning id
+"
+  |> pog.query
+  |> pog.returning(decoder)
+  |> pog.execute(db)
+}
+
 /// Runs the `set_pinned` query
 /// defined in `./src/nexus/store/sql/set_pinned.sql`.
 ///

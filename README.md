@@ -83,8 +83,9 @@ from the store, the Lustre server-component runtime, and a Mist server at
 the bound address (default `127.0.0.1:8080`). No session is created at
 boot — sessions are always user-initiated (the sidebar's create panel
 auto-opens whenever no active session is selectable), and never-used
-sessions (system prompt only, untitled, unpinned) are swept at boot, so
-restarts cannot litter the list with empties. Sessions are durable: turn
+sessions (system prompt only, untitled, unpinned) past a 15-minute grace
+window are swept at boot, so restarts cannot litter the list with
+empties. Sessions are durable: turn
 commits persist
 write-behind (in seq order, idempotent on replay), metadata mutations
 write through, and a restart rehydrates — stored-but-not-live sessions
