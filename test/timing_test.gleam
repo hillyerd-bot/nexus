@@ -54,15 +54,6 @@ pub fn median_large_test() {
   should.equal(m, 7.0)
 }
 
-pub fn mean_test() {
-  let assert Ok(m) = timing.mean([10.0, 20.0, 30.0])
-  should.equal(m, 20.0)
-}
-
-pub fn mean_empty_test() {
-  timing.mean([]) |> should.be_error
-}
-
 pub fn wall_now_s_is_recent_epoch_test() {
   // A real wall-clock epoch (post-2020), coarse to whole seconds.
   let now = timing.wall_now_s()

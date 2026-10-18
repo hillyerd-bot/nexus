@@ -274,17 +274,6 @@ pub fn agent_runner(cfg: Config, specs: List(tools.ToolSpec)) -> TurnRunner {
   }
 }
 
-/// Back-compat convenience: the agent loop with no tools registered —
-/// exactly one model round-trip per turn, M1 semantics.
-pub fn bifrost_runner(
-  cfg: Config,
-  tr: Transcript,
-  cancel: Subject(Nil),
-  on_event: fn(loop.LoopEvent) -> Nil,
-) -> TurnOutcome {
-  agent_runner(cfg, [])(cfg, tr, cancel, on_event)
-}
-
 /// Start the session actor standalone with an explicit spec (M2 §7 step 1).
 pub fn start_with_spec(spec: SessionSpec) -> actor.StartResult(Subject(Msg)) {
   start_builder(spec) |> actor.start

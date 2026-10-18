@@ -64,14 +64,3 @@ pub fn median(values: List(Float)) -> Result(Float, Nil) {
     }
   }
 }
-
-/// Mean of a list of floats. `Error(Nil)` for the empty list.
-pub fn mean(values: List(Float)) -> Result(Float, Nil) {
-  case values {
-    [] -> Error(Nil)
-    _ -> {
-      let n = int.to_float(list.length(values))
-      Ok(list.fold(values, 0.0, fn(a, b) { a +. b }) /. n)
-    }
-  }
-}
