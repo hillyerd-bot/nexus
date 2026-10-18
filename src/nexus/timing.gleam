@@ -1,7 +1,7 @@
-//// Monotonic timing helpers shared by the spike runners.
+//// Monotonic timing helpers shared by the server and the TTFT audit tool.
 ////
 //// All clocks are `erlang:monotonic_time/1` based (immune to wall-clock
-//// shifts). Spike C's warm/cold ratio depends on these being honest.
+//// shifts). The audit's warm/cold ratio depends on these being honest.
 
 import gleam/float
 import gleam/int

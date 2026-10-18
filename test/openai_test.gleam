@@ -3,7 +3,7 @@
 ////
 //// The usage-forwarding case is the regression guard for the PR #3 review
 //// finding: `chunk.usage` was silently dropped (the `Usage` event was
-//// declared but never emitted), which would have lost spike C's
+//// declared but never emitted), which would have lost the audit tool's
 //// cached_tokens evidence.
 
 import gleam/option.{type Option, None, Some}
@@ -90,7 +90,7 @@ pub fn usage_is_forwarded_not_dropped_test() {
       fn(_) { Nil },
     )
   // The accumulator (and thus StreamStats) must carry the usage block —
-  // this is spike C's secondary cache-hit signal.
+  // this is the audit tool's secondary cache-hit signal.
   out.usage |> should.equal(Some(usage))
   out.events_parsed |> should.equal(1)
   out.token_deltas |> should.equal(0)

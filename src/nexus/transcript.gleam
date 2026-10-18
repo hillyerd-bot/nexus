@@ -1,5 +1,5 @@
 //// Append-only transcript and the **single request-encoding path** shared
-//// by every spike and (later) the product.
+//// by the TTFT audit tool and the product.
 ////
 //// The KV-cache contract requires that re-encoding an unchanged message
 //// prefix yields byte-identical request bodies (rule 4). That property is
@@ -73,7 +73,7 @@ pub fn append_assistant(transcript: Transcript, text: String) -> Transcript {
   ])
 }
 
-/// Append an assistant turn carrying a native tool call (spike B round-trip).
+/// Append an assistant turn carrying a native tool call (tool round-trip).
 pub fn append_assistant_tool_call(
   transcript: Transcript,
   id id: String,
@@ -125,7 +125,7 @@ pub fn append_assistant_tool_calls(
   ])
 }
 
-/// Append a tool result turn (spike B round-trip).
+/// Append a tool result turn (tool round-trip).
 pub fn append_tool_result(
   transcript: Transcript,
   tool_call_id tool_call_id: String,

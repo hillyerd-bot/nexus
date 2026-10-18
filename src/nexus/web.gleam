@@ -117,7 +117,7 @@ fn with_session(
 }
 
 fn models_response(cfg: Config) -> Response(mist.ResponseData) {
-  case openai.list_models(cfg) {
+  case openai.list_models(openai.endpoint_from_config(cfg)) {
     Ok(models) -> json_response(200, models_json(models))
     Error(_) ->
       json_response(502, err_json("unable to list models from Bifrost"))
@@ -161,7 +161,7 @@ fn create_session_response(
       case string.trim(model) {
         "" -> json_response(400, err_json("empty model"))
         trimmed ->
-          case openai.list_models(cfg) {
+          case openai.list_models(openai.endpoint_from_config(cfg)) {
             Error(_) ->
               json_response(502, err_json("unable to list models from Bifrost"))
             Ok(models) ->

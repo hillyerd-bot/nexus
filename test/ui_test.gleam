@@ -19,8 +19,6 @@ fn test_config() -> Config {
     model_default: "smart",
     sse_first_response_timeout_ms: 1,
     stream_idle_timeout_ms: 1,
-    spike_c_turns: 1,
-    spike_c_repeats: 1,
     http_bind: "127.0.0.1",
     http_port: 0,
     ui_token: None,

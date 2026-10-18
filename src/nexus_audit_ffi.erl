@@ -1,6 +1,6 @@
-%% FFI for the surviving spike runner (spikes/c_cache): process exit,
-%% plain argv, and a unique integer for per-run identifiers.
--module(nexus_spike_ffi).
+%% FFI for the TTFT audit tool (audit/ttft): process exit, plain argv,
+%% and a unique integer for per-run identifiers.
+-module(nexus_audit_ffi).
 
 -export([halt/1, argv/0, unique_integer/0]).
 
