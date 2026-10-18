@@ -13,7 +13,10 @@ with **provider + model pinned per session**.
 
 > Decisions captured here came out of the 2026-10-18 planning session;
 > implementation is split into the phased roadmap (§17), each phase to be
-> kicked off separately.
+> kicked off separately. Revised the same day after the pre-work merges
+> landed on main: #5 (no boot session + boot sweep), #6 (quote-aware
+> migrate splitter), #7 (audit tool decoupled to `audit/ttft`, and
+> `nexus/openai` now takes a narrow `Endpoint` record — see §2).
 
 ## 1. Goal and non-goals
 
@@ -32,22 +35,27 @@ Every session pins exactly one `(provider, model)` pair for its lifetime.
   provider is fixed; recovery is out of scope.
 - Provider health/scoring, cost accounting.
 
-## 2. Current state (the single-provider assumption)
+## 2. Current state (after the pre-work merges)
 
 | Seam | File | Today |
 |---|---|---|
-| Config | `src/nexus/config.gleam` | one `base_url` (must end `/v1`) + `api_key`, both required |
-| Transport | `src/nexus/openai.gleam` | `to_openai_config(cfg)` builds one glopenai client; `list_models(cfg)` |
-| Loop | `src/nexus/loop.gleam` | `bifrost_stream(cfg)` |
+| Config | `src/nexus/config.gleam` | one `base_url` (must end `/v1`) + `api_key` + `model_default`, all required |
+| Transport | `src/nexus/openai.gleam` | **already endpoint-shaped**: `Endpoint(base_url, api_key: Option, sse timeouts)`; `stream`/`stream_with_cancel`/`list_models` take it; `endpoint_from_config(cfg)` derives it; `drop_empty_bearer` omits auth for keyless |
+| Loop | `src/nexus/loop.gleam` | `bifrost_stream(cfg)` — still wraps `endpoint_from_config(cfg)` |
 | Session | `src/nexus/session.gleam` | `agent_runner(cfg, specs)` closes over global `cfg`; `TurnRunner = fn(Config, Transcript, cancel, on_event)` |
 | Model | `src/nexus/transcript.gleam` | `Transcript(model: String, …)` — the only model identity |
 | Schema | `sql/schema.sql` | `session.model text` — alias only, provider implicit |
 | Web | `src/nexus/web.gleam` | `GET /models`, `POST /sessions {model}` |
 | UI | `src/nexus/ui.gleam` | one flat alias list; subtitle `model · relative time` |
+| Boot | `src/nexus/boot.gleam` | mints **no** session (PR #5); creation is user-initiated, create panel auto-opens |
+| Audit tool | `src/audit/ttft.gleam` + `src/audit/config.gleam` | own `NEXUS_AUDIT_*` env, builds its own `Endpoint` (PR #7) |
 
-Because glopenai is instantiated per request (`oai_config.new(key) |>
-oai_config.with_api_base(url)`), no library surface changes are needed for
-per-session providers — only where those two strings come from.
+The PR #7 `Endpoint` seam is the big head start: the transport already
+takes a per-endpoint record with an **optional** key (keyless endpoints
+drop the Authorization header entirely), and glopenai is instantiated per
+request from it. What is still single-provider: where the `Endpoint`
+comes from (`endpoint_from_config` — one env pair), the loop/session
+signatures (still `Config`), and the schema/UI/model picker.
 
 The KV-cache contract (`docs/plans/mvp-requirements.md`) is the binding
 constraint: provider + model are frozen at session creation (like the
@@ -72,8 +80,11 @@ in-place edit.
 8. **Pre-deployment schema edit, not a migration** — nexus has not been
    deployed, so `sql/schema.sql` is edited in place (per `AGENTS.md`);
    no `ALTER`, no backfill, no legacy NULL handling.
-9. **The migrate-tool splitter fix is optional and decoupled** from this
-   feature; the c_cache decouple may land first (§18).
+9. **Pre-work landed before implementation** (main, 2026-10-18): the
+   migrate splitter is quote-aware (#6, was "optional" in the draft), the
+   audit tool is decoupled as `audit/ttft` with its own env (#7, was a P6
+   precondition), and no boot session is minted (#5 — so this plan must
+   not reintroduce one).
 
 ## 4. Architecture overview
 
@@ -87,20 +98,24 @@ boot
     ├─ ui_runtime
     └─ mist
 
-session actor ──frozen ProviderSpec──> loop.run ──> openai.stream(spec, …)
+session actor ──frozen openai.Endpoint──> loop.run ──> openai.stream(endpoint, …)
                        ▲
-                       └── resolved at create via provider_registry
+                       └── resolved by provider_id at create / hydration
 ```
 
 - `nexus/crypto` — pure AES-256-GCM over OTP `crypto` (FFI). No provider
   logic.
-- `nexus/provider` — pure types + validation + masking (`ProviderSpec`,
-  `Provider` row, base-URL normalization, key hinting).
+- `nexus/provider` — pure types + validation + masking (`Provider` row
+  metadata, base-URL normalization, `has_key` hinting).
 - `nexus/provider_registry` — actor: load from store, decrypt lazily,
-  cache, CRUD, hand out frozen `ProviderSpec`.
+  cache, CRUD, resolve `provider_id` → runtime `openai.Endpoint` plus
+  metadata.
 - Store stays dumb: it reads/writes **ciphertext only**. Encryption lives
   in the registry, so the mockable seam never handles plaintext and offline
   tests can fake crypto.
+- The draft's `ProviderSpec` collapses into the **existing**
+  `openai.Endpoint` (PR #7) plus a small `Provider` metadata record — no
+  new runtime shape is invented.
 
 ## 5. Data model
 
@@ -143,10 +158,11 @@ NULL/legacy path exists. `ON DELETE RESTRICT` enforces the "hard delete
 only if unreferenced" rule at the DB layer, backed by the registry's `409`
 pre-check.
 
-The naive `migrate` splitter is therefore **not** a constraint here: the
-change is a plain `CREATE` edit with no semicolons in literals. Moving the
-`session` block below the new `provider` block is the only structural care
-needed.
+The `migrate` splitter is no longer a constraint at all: it is
+quote-aware since #6 (single/double/dollar quotes, `--` lines, nested
+`/* */` — see `AGENTS.md` and `test/migrate_test.gleam`), and the change is
+a plain `CREATE` edit regardless. Moving the `session` block below the new
+`provider` block is the only structural care needed.
 
 ### 5.3 Queries (`src/nexus/store/sql/*.sql`, one per file, filename = fn name)
 
@@ -172,14 +188,13 @@ Amended:
 Regenerate with `gleam run -m squirrel` and commit; CI's `squirrel check`
 gates drift.
 
-### 5.4 Optional: harden the `nexus/store/migrate.gleam` splitter
+### 5.4 Migration splitter hardening — **landed** (#6)
 
-Not required for this feature (the schema edit is plain `CREATE`), but it
-remains a latent footgun: the splitter strips `--` comments and splits on
-`;`, so any future `DO $$…$$` block, `CREATE FUNCTION`, or literal
-containing `;` breaks. A small quote-aware splitter (single, double, and
-dollar quotes) with unit tests removes that trap. Land independently;
-**do not gate multi-provider on it.**
+`nexus/store/migrate.gleam`'s statement splitter is now quote-aware
+(single/double quotes, dollar quotes `$$…$$` / `$tag$…$tag$`, `--` lines,
+nested `/* */`), so future `DO $$…$$` blocks, `CREATE FUNCTION` bodies, or
+literals containing `;` split correctly. Documented in `AGENTS.md`; unit
+tests in `test/migrate_test.gleam`. Nothing left to do here.
 
 ## 6. Encryption at rest (`nexus/crypto`)
 
@@ -218,23 +233,27 @@ Messages:
 - `List(reply: Subject(Result(List(Provider), _)))` — metadata + `has_key`,
   never the key.
 - `Get(id, reply)` — metadata.
-- `Resolve(id, reply) -> Result(ProviderSpec, _)` — decrypts, returns the
-  runtime spec used to stream.
+- `Resolve(id, reply) -> Result(ResolvedProvider, _)` — decrypts, returns
+  the runtime pair used to stream.
 - `Create(params, reply)`, `Update(id, params, reply)`,
   `Delete(id, reply)`, `SetEnabled(id, bool, reply)`.
-- `ListModels(id, reply)` — delegates to `openai.list_models(spec)`.
+- `ListModels(id, reply)` — delegates to `openai.list_models(endpoint)`.
 
-`ProviderSpec` (runtime, holds the **plaintext** key, never persisted or
-serialized):
+`ResolvedProvider` (runtime, holds the **plaintext** key in its
+`Endpoint`, never persisted or serialized):
 
 ```
-ProviderSpec(id: String, name: String, base_url: String, api_key: Option(String))
+ResolvedProvider(id: String, name: String, endpoint: openai.Endpoint)
 ```
+
+The SSE timeouts ride on `Endpoint` exactly as `endpoint_from_config`
+builds them today — they stay server-global policy, not per-provider
+identity (per-provider overrides deferred, §18).
 
 Caching: providers are small and change rarely; the actor keeps a
-`Dict(String, ProviderSpec)` cache populated on first `Resolve`, invalidated
-on update/delete. Reads of the whole table happen once at start (so a bad
-envelope fails loudly at boot, not on first message).
+`Dict(String, ResolvedProvider)` cache populated on first `Resolve`,
+invalidated on update/delete. Reads of the whole table happen once at
+start (so a bad envelope fails loudly at boot, not on first message).
 
 **Boot order change** (`src/nexus/boot.gleam`): store first, then
 **provider_registry**, then factory, session_registry, ui_runtime, mist.
@@ -243,21 +262,22 @@ The registry resolves the seam by name like the session registry does.
 ## 8. Session pinning and the runner change
 
 - `TurnRunner` becomes
-  `fn(ProviderSpec, Transcript, cancel, on_event) -> StreamOutcome`.
-  `session.agent_runner(spec-details, tools)` captures only config that is
-  provider-independent (`max_tool_iterations`, tool specs); the provider
-  comes in per call.
-- Session state gains a frozen `provider: ProviderSpec` resolved at create.
-  `SessionSpec` gains `provider_id`; `start_builder` resolves/accepts the
-  spec via the registry (production) or injected into the spec (tests).
-- `loop.bifrost_stream(cfg)` → `loop.openai_stream(spec)`;
-  `openai.stream(spec, …)` / `openai.stream_with_cancel(spec, …)` /
-  `openai.list_models(spec)` build the glopenai client from `spec` instead
-  of `cfg`.
+  `fn(Endpoint, Transcript, cancel, on_event) -> StreamOutcome`.
+  `session.agent_runner` captures only provider-independent config
+  (`max_tool_iterations`, tool specs); the endpoint comes in per call.
+- Session state gains a frozen `provider: ResolvedProvider` (or just its
+  `Endpoint` + `provider_id`, whichever reads better) resolved at create.
+  `SessionSpec` gains `provider_id`; `start_builder` resolves via the
+  registry (production) or accepts an injected endpoint (tests).
+- `loop.bifrost_stream(cfg)` → `loop.endpoint_stream(endpoint: Endpoint)`
+  — it already derives an `Endpoint` internally (PR #7); the change is
+  taking it as a parameter instead of `Config`.
+- `openai.stream` / `stream_with_cancel` / `list_models` **already take
+  `Endpoint`** (PR #7); `endpoint_from_config` is deleted at the hard cut.
 - `session.model` and `transcript.model` stay the alias string; the
   provider lives beside them in session state and the `session.provider_id`
-  column. Hydration resolves the spec by persisted id, then rebuilds the
-  transcript exactly as today.
+  column. Hydration resolves the endpoint by persisted id, then rebuilds
+  the transcript exactly as today.
 - **Fork rule:** a provider or model change = create a new session. No
   in-place switch, no re-encode. This preserves the frozen-prefix contract
   byte-for-byte.
@@ -271,16 +291,20 @@ The registry resolves the seam by name like the session registry does.
   *across* providers (different endpoints) and stays provider-local within
   one (Bifrost routing unchanged).
 - The golden prefix tests (`test/m3_prefix_test.gleam`) must still pass
-  with a `ProviderSpec` injected; a new golden test asserts that switching
-  a spec's **key** (same base URL + model) produces byte-identical request
-  bodies — credentials never enter the body.
+  with an injected `Endpoint`; a new golden test asserts that switching the
+  endpoint's **key** (same base URL + model) produces byte-identical
+  request bodies — credentials appear only in the `Authorization` header
+  (and are omitted entirely when absent, per `drop_empty_bearer`).
 - Warm/cold TTFT evidence is now **per provider**; the audit tool canon
   (§13) must name its provider.
 
-## 10. Transport changes (`nexus/openai`)
+## 10. Transport changes (`nexus/openai`) — mostly landed (PR #7)
 
-- Replace `Config` params with `ProviderSpec` in `list_models`, `stream`,
-  `stream_with_cancel`, `to_openai_config`.
+- **Done:** `list_models`, `stream`, `stream_with_cancel`, and
+  `to_openai_config` take `Endpoint`, not `Config`; keyless endpoints drop
+  the `Authorization` header (`drop_empty_bearer`, unit-tested).
+- **Remaining:** delete `endpoint_from_config` at the hard cut (its only
+  remaining callers become registry-driven).
 - `list_models` keeps the Bifrost `alias`-field fallback decoder.
 - Add `dialect` dispatch stub: only `openai` implemented; anything else is
   a typed `UnsupportedDialect` error (no silent fallback).
@@ -298,7 +322,7 @@ rest of the JSON surface).
 | `DELETE /providers/<id>` | — | `409` while `count_sessions_for_provider > 0`; prefer `enabled:false` |
 | `GET /providers/<id>/models` | — | live alias list from that provider |
 | `POST /sessions` | `{provider, model}` | both validated; provider resolved by name/id; pin both |
-| `GET /models` | — | **deprecated** alias for the default provider's models |
+| `GET /models` | — | **removed** at the hard cut — no "default provider" exists to answer it; callers use `GET /providers/<id>/models` |
 
 Session summaries gain `provider` (name) for display; the UI subtitle
 becomes `provider/model · relative time`.
@@ -321,35 +345,35 @@ unreachable/auth failure on model list → `502` (existing pattern).
 
 `nexus/config.Config`:
 
-- **Removed:** `base_url`, `api_key`.
-- **Added:** `encryption_key: String` (required),
-  `provider_default: Option(String)` (provider **name** for the boot
-  session), and `model_default` becomes `Option(String)`.
-- **Unchanged:** PG fields, timeouts, system prompt, tool/web-search knobs.
+- **Removed:** `base_url`, `api_key`, and `model_default` — the last is
+  dead weight since #5 stopped minting a boot session; this plan must not
+  reintroduce one.
+- **Added:** `encryption_key: String` (required).
+- **Unchanged:** PG fields, SSE timeouts, system prompt, tool/web-search
+  knobs. No `provider_default`/`model_default` env: nothing boots a
+  session anymore; creation is user-initiated (sidebar create panel,
+  auto-opened when no active session is selectable — the #5 UX).
 
 First run:
 
 1. Boot loads config; missing/invalid `NEXUS_ENCRYPTION_KEY` → fail loudly.
-2. Provider registry starts with an empty table → zero providers.
-3. Boot creates the default session **only if** `NEXUS_PROVIDER_DEFAULT`
-   and `NEXUS_MODEL_DEFAULT` both resolve to an existing/enabled provider
-   and model. Otherwise the server starts with an empty session list and
-   the operator creates a provider via `POST /providers` (or the UI).
-4. README documents the new required env and the first-run curl.
+2. Provider registry starts with an empty table → zero providers, zero
+   sessions, create panel auto-opens.
+3. Operator creates a provider via the UI or `POST /providers`, then
+   creates a session choosing provider + model.
+4. README documents the new required env and the first-run flow.
 
-**Audit tool canon (open prerequisite).** `spikes/c_cache` currently reads
-the removed `BIFROST_*` env (and shares `nexus/config`). It must be
-decoupled — its own small loader (`NEXUS_AUDIT_BASE_URL` /
-`NEXUS_AUDIT_API_KEY` / `NEXUS_AUDIT_MODEL`) or CLI flags — but **this is
-tracked separately and may land before multi-provider (§18).** It is a
-standalone operator tool and must not be coupled to the server's provider
-store.
+**Audit tool — landed (#7).** `audit/ttft` reads its own
+`NEXUS_AUDIT_BASE_URL` / `NEXUS_AUDIT_MODEL` / optional
+`NEXUS_AUDIT_API_KEY` env via `src/audit/config.gleam`, builds its own
+`Endpoint`, and no longer imports `nexus/config`. The server hard cut
+cannot break it.
 
 **Test churn.** Every `test/*.gleam` fixture that constructs
-`config.Config(base_url:, api_key:, …)` (`session_test`,
+`config.Config(base_url:, api_key:, model_default:, …)` (`session_test`,
 `session_persistence_test`, `session_registry_test`, `web_routes_test`,
-`ui_test`, `m3_prefix_test`, …) must drop those fields and supply a
-`ProviderSpec`/registry fixture instead.
+`ui_test`, `m3_prefix_test`, …) must drop those fields and supply an
+`Endpoint`/registry fixture instead.
 
 ## 14. Security and threat model
 
@@ -384,8 +408,11 @@ store.
   the volume instead of relying on `migrate` for that edit.
 - CI applies schema via `gleam run -m nexus/store/migrate` on a fresh
   Postgres service container, so it picks the edit up with no change.
-- Remove `BIFROST_*` from `.env` examples, README env table, and
-  `docker-compose`/e2e wiring; add `NEXUS_ENCRYPTION_KEY`.
+- Remove `BIFROST_*` and `NEXUS_MODEL_DEFAULT` from `.env` examples, the
+  README env table, and `docker-compose`/e2e wiring; add
+  `NEXUS_ENCRYPTION_KEY`. Delete `openai.endpoint_from_config` and the
+  boot log line that prints the default alias; the audit tool's
+  `NEXUS_AUDIT_*` env is untouched (separate since #7).
 - No data exists, so there is no NULL-provider path and no backfill. The
   ciphertext format is introduced with the feature; nothing to rotate.
 
@@ -404,34 +431,40 @@ store.
 - new golden test: same base URL + model, different key ⇒ byte-identical
   request body; existing `m3_prefix_test` still byte-identical with an
   injected spec.
-- `config_test`: `NEXUS_ENCRYPTION_KEY` required; `BIFROST_*` gone.
+- `config_test`: `NEXUS_ENCRYPTION_KEY` required; `BIFROST_*` and
+  `NEXUS_MODEL_DEFAULT` gone.
 
 ## 17. Phased roadmap
+
+Landed pre-work (main, before implementation): **#5** no boot session +
+boot sweep, **#6** quote-aware migrate splitter, **#7** audit tool
+decoupled to `audit/ttft` and `openai` endpoint-shaped (`Endpoint`,
+optional key, `drop_empty_bearer`). #7 in particular absorbs most of the
+old P3 plumbing.
 
 | Phase | Scope | Acceptance |
 |---|---|---|
 | P0 | `nexus/crypto` + FFI + tests | round-trip + tamper tests pass offline |
 | P1 | `provider` table + `session.provider_id` + squirrel queries + store seam + mock | `squirrel check` clean; store tests offline |
 | P2 | `nexus/provider_registry` + boot wiring | creates/lists/resolves a provider from a live DB; boot fails on bad key |
-| P3 | Config hard cut + `ProviderSpec` plumbing through openai/loop/session | server starts with zero providers; boot session gated on default env |
+| P3 | Config hard cut; `loop`/`session` take `Endpoint` (transport already does); delete `endpoint_from_config` | server starts with zero providers, zero sessions; a session streams via its frozen endpoint |
 | P4 | HTTP API (`/providers`, provider-scoped `/models`, `POST /sessions`) | curl CRUD; key never echoed; `409` delete guard |
-| P5 | UI provider management + provider→model picker | create provider, create session, stream a turn end-to-end |
-| P6 | Audit-tool decoupling (**may land earlier, §18**) + docs | `c_cache` runs via its own config; README updated |
-| P7 (deferred) | key rotation/`rewrap`, dialect stubs | not required for ship |
+| P5 | UI provider management + provider→model picker + docs | create provider, create session, stream a turn end-to-end; README updated |
+| P6 (deferred) | key rotation/`rewrap`, dialect stubs, per-provider timeout overrides | not required for ship |
 
 Each phase keeps `gleam test` offline and the golden prefix invariants
 green.
 
 ## 18. Open questions / risks
 
-- **Audit-tool decoupling (`spikes/c_cache`) is left open** — the operator
-  may decouple it from `nexus/config` *before* multi-provider. It is a P6
-  precondition, not a core-MVP blocker.
+- **Per-provider timeout overrides:** SSE first-response/idle timeouts ride
+  on `Endpoint` but are filled from server-global config; per-provider
+  values would need columns. Deferred (P6).
 - **Model list caching:** live fetch per picker open is fine at this
   scale; add a short TTL only if it proves slow.
 - **`update_provider.sql` key semantics** need an explicit `replace_key`
   boolean; verify squirrel handles the boolean + `COALESCE` ergonomically.
-- **`ProviderSpec` holds a plaintext key inside session state** — accepted
+- **`Endpoint` holds a plaintext key inside session state** — accepted
   (in-process), but audit that it never lands in `describe`/metrics/
   summaries; add a "no key in serialized output" test.
 - **`insert_session` gains a column** — the generated row/param types in
