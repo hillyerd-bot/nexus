@@ -17,7 +17,7 @@ pub type Config {
     api_key: String,
     /// Model alias used by the audit tool and the boot session.
     model_default: String,
-    /// httpp/sse first-response (status/headers) timeout in ms.
+    /// SSE first-response (status/headers) timeout in ms.
     sse_first_response_timeout_ms: Int,
     /// Our own receive timeout between SSE events mid-stream, in ms.
     stream_idle_timeout_ms: Int,

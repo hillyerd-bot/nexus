@@ -12,9 +12,9 @@ import gleam/option.{None, Some}
 import gleam/otp/factory_supervisor
 import gleam/string
 import gleeunit/should
-import httpp/send
 import mist
 import nexus/config.{type Config}
+import nexus/hackney
 import nexus/loop
 import nexus/openai
 import nexus/session
@@ -113,7 +113,7 @@ fn authorized(req: Request(String)) -> Request(String) {
 }
 
 fn send_authorized(req: Request(String)) -> #(Int, String) {
-  let assert Ok(response) = send.send(authorized(req))
+  let assert Ok(response) = hackney.send(authorized(req))
   #(response.status, response.body)
 }
 
@@ -160,10 +160,10 @@ pub fn patch_delete_and_archive_routes_test() {
   // ---- auth gates the new routes --------------------------------------
   // A PATCH without the token never reaches the handler.
   let assert Ok(denied) =
-    send.send(req(Patch, "/sessions/" <> record.id, "{\"pinned\":true}"))
+    hackney.send(req(Patch, "/sessions/" <> record.id, "{\"pinned\":true}"))
   should.equal(denied.status, 401)
   let assert Ok(unauthorized) =
-    send.send(req(Delete, "/sessions/" <> record.id, ""))
+    hackney.send(req(Delete, "/sessions/" <> record.id, ""))
   should.equal(unauthorized.status, 401)
 
   // ---- auto-title at the send boundary --------------------------------
