@@ -31,8 +31,10 @@ pub type CryptoError {
   InvalidEnvelope
   /// GCM authentication failed: wrong key, wrong AAD, or tampered bytes.
   AuthenticationFailed
-  /// Backend refused to encrypt. Unreachable once the key-length pre-check
-  /// passes; a typed home for the FFI's backstop catch.
+  /// Backend refused to encrypt — AEAD error or nonce-source failure
+  /// (`strong_rand_bytes` can raise `low_entropy`). Unreachable in
+  /// practice once the key-length pre-check passes; a typed home for the
+  /// FFI's backstop catches. Never retried with weaker randomness.
   EncryptFailed
   /// Authenticated plaintext was not valid UTF-8. Impossible via `encrypt`
   /// (it takes a `String`); defense in depth on `decrypt`.
@@ -40,7 +42,7 @@ pub type CryptoError {
 }
 
 @external(erlang, "nexus_crypto_ffi", "strong_rand_bytes")
-fn strong_rand_bytes(n: Int) -> BitArray
+fn strong_rand_bytes(n: Int) -> Result(BitArray, Nil)
 
 /// FFI encrypt → `Ok(#(ciphertext, tag))`; the Erlang catch maps any
 /// backend failure to `nil`.
@@ -99,7 +101,11 @@ pub fn encrypt(
   case bit_array.byte_size(key) == key_bytes {
     False -> Error(InvalidKey)
     True -> {
-      let nonce = strong_rand_bytes(12)
+      // A nonce-source failure is EncryptFailed, never a retry with a
+      // weaker nonce — GCM confidentiality rides on nonce uniqueness.
+      use nonce <- result.try(
+        strong_rand_bytes(12) |> result.replace_error(EncryptFailed),
+      )
       case aead_encrypt(key, nonce, aad, plaintext) {
         Ok(#(ciphertext, tag)) ->
           // 0x01 || nonce(12) || tag(16) || ciphertext

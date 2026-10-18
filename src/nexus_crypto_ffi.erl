@@ -7,9 +7,14 @@
 -export([strong_rand_bytes/1, aead_encrypt/4, aead_decrypt/5]).
 
 %% N fresh random bytes for the per-encryption nonce. Always from the
-%% strong source, never derived from the key.
+%% strong source, never derived from the key, and never a weaker fallback:
+%% {error, nil} (→ Gleam EncryptFailed) beats continuing with bad entropy.
 strong_rand_bytes(N) ->
-    crypto:strong_rand_bytes(N).
+    try
+        {ok, crypto:strong_rand_bytes(N)}
+    catch
+        _:_ -> {error, nil}
+    end.
 
 %% Returns {ok, {CipherText, Tag}}. Key/IV lengths are validated in
 %% Gleam first; the catch is a backstop so a backend error can never
