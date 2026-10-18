@@ -6,7 +6,9 @@
 //// Only the surface nexus consumes is kept:
 ////
 //// - `send` — buffered (non-streaming) requests, used by the
-////   `list_models` preflight and the zero-events buffered retry;
+////   `list_models` preflight and the zero-events buffered retry; uses
+////   hackney's default pool so keep-alive sockets are returned after each
+////   read;
 //// - the async-response types plus `close` and `selecting_http_message`,
 ////   which type hackney's stream messages for the selector receive in
 ////   `nexus/openai`.
@@ -32,7 +34,6 @@ import gleam/uri
 pub type Error {
   Other(Dynamic)
   ConnectionClosed(partial_body: BitArray)
-  TimedOut
   /// The response body was not valid UTF-8.
   InvalidUtf8Response
 }
@@ -58,8 +59,6 @@ pub type HackneyResponse {
 
 pub type Options {
   WithBody(Bool)
-  /// Disable the hackney connection pool.
-  Pool(Bool)
 }
 
 @external(erlang, "nexus_hackney_ffi", "send")
@@ -74,9 +73,10 @@ fn send_ffi(
 @external(erlang, "nexus_hackney_ffi", "close")
 pub fn close(ref: ClientRef) -> Nil
 
-/// Fetch the full body for a client-ref response. Note hackney returns raw
-/// error terms here (not tagged like `Error`), so only inspect the error.
-@external(erlang, "hackney", "body")
+/// Fetch the full body for a client-ref response. Errors are translated
+/// in `nexus_hackney_ffi:body/1` (mirroring `send/5`) so callers only ever
+/// see `ConnectionClosed` / `Other` constructors.
+@external(erlang, "nexus_hackney_ffi", "body")
 fn body_ffi(ref: ClientRef) -> Result(BitArray, Error)
 
 /// A decoded hackney stream message, as delivered to the process that
@@ -197,7 +197,12 @@ pub fn send(req: Request(String)) -> Result(Response(String), Error) {
 }
 
 fn send_bits(req: Request(BytesTree)) -> Result(Response(BitArray), Error) {
-  let options = [WithBody(False), Pool(False)]
+  // Default pooling (no `Pool` option): hackney checks keep-alive sockets
+  // back into the pool once the body is read (hackney_response:
+  // end_stream_body/2), so repeated buffered sends from a long-lived
+  // process do not retain connections. A non-pooled keep-alive socket
+  // would otherwise stay open until the owning process exits.
+  let options = [WithBody(False)]
 
   use response <- result.try(
     req
