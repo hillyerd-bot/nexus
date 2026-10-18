@@ -15,7 +15,7 @@
 //// re-running is safe. Statements are split by a quote-aware scanner
 //// (`statements`), so `;` inside string literals, double-quoted
 //// identifiers, dollar-quoted bodies (`CREATE FUNCTION` / `DO`), and
-//// comments does not break a statement apart.
+//// comments do not break a statement apart.
 
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -96,114 +96,150 @@ fn or_panic(result: Result(a, e), message: String) -> a {
 /// `/* ... */` block comments are stripped too, so a `;` in a comment is
 /// inert.
 ///
+/// The script is scanned by Unicode codepoint (not grapheme cluster), so
+/// CRLF line endings and non-ASCII dollar-quote tags are handled correctly.
+/// A `$` that continues an unquoted identifier (`audit$log$`) is not a
+/// dollar-quote opener. An unterminated block comment keeps its `/*` marker
+/// so PostgreSQL rejects the statement instead of silently applying a
+/// truncated one.
+///
 /// Escaped quotes (`''` and `""`) are understood. PostgreSQL's default
 /// `standard_conforming_strings` is assumed, so a backslash is literal and
 /// only doubling escapes a quote (i.e. `E'...'` escape strings are not
 /// distinguished).
 pub fn statements(schema: String) -> List(String) {
-  scan_code(string.to_graphemes(schema), [], []) |> list.reverse
+  let chars =
+    schema
+    |> string.to_utf_codepoints
+    |> list.map(string.utf_codepoint_to_int)
+  scan_code(chars, [], []) |> list.reverse
 }
 
+// Codepoints used throughout the scanner:
+// `"`=34, `$`=36, `'`=39, `*`=42, `-`=45, `/`=47, `;`=59, space=32,
+// `\n`=10, `\r`=13, `_`=95.
+
 fn scan_code(
-  chars: List(String),
-  current: List(String),
+  chars: List(Int),
+  current: List(Int),
   done: List(String),
 ) -> List(String) {
   case chars {
     [] -> finish(current, done)
-    ["-", "-", ..rest] -> scan_line_comment(rest, current, done)
-    ["/", "*", ..rest] -> scan_block_comment(1, rest, current, done)
-    ["'", ..rest] -> scan_single(rest, ["'", ..current], done)
-    ["\"", ..rest] -> scan_double(rest, ["\"", ..current], done)
-    [";", ..rest] -> scan_code(rest, [], finish(current, done))
-    ["$", ..rest] ->
-      case parse_dollar(rest) {
-        Ok(#(tag, after)) ->
-          scan_dollar(tag, after, [dollar_delimiter(tag), ..current], done)
-        Error(_) -> scan_code(rest, ["$", ..current], done)
+    [45, 45, ..rest] -> scan_line_comment(rest, current, done)
+    [47, 42, ..rest] -> scan_block_comment(1, rest, current, done)
+    [39, ..rest] -> scan_single(rest, [39, ..current], done)
+    [34, ..rest] -> scan_double(rest, [34, ..current], done)
+    [59, ..rest] -> scan_code(rest, [], finish(current, done))
+    [36, ..rest] ->
+      case current {
+        [previous, ..] ->
+          case is_ident_continue(previous) {
+            True -> scan_code(rest, [36, ..current], done)
+            False -> try_dollar(rest, current, done)
+          }
+        [] -> try_dollar(rest, current, done)
       }
     [char, ..rest] -> scan_code(rest, [char, ..current], done)
   }
 }
 
 fn scan_single(
-  chars: List(String),
-  current: List(String),
+  chars: List(Int),
+  current: List(Int),
   done: List(String),
 ) -> List(String) {
   case chars {
     [] -> finish(current, done)
-    ["'", "'", ..rest] -> scan_single(rest, ["'", "'", ..current], done)
-    ["'", ..rest] -> scan_code(rest, ["'", ..current], done)
+    [39, 39, ..rest] -> scan_single(rest, [39, 39, ..current], done)
+    [39, ..rest] -> scan_code(rest, [39, ..current], done)
     [char, ..rest] -> scan_single(rest, [char, ..current], done)
   }
 }
 
 fn scan_double(
-  chars: List(String),
-  current: List(String),
+  chars: List(Int),
+  current: List(Int),
   done: List(String),
 ) -> List(String) {
   case chars {
     [] -> finish(current, done)
-    ["\"", "\"", ..rest] -> scan_double(rest, ["\"", "\"", ..current], done)
-    ["\"", ..rest] -> scan_code(rest, ["\"", ..current], done)
+    [34, 34, ..rest] -> scan_double(rest, [34, 34, ..current], done)
+    [34, ..rest] -> scan_code(rest, [34, ..current], done)
     [char, ..rest] -> scan_double(rest, [char, ..current], done)
+  }
+}
+
+fn try_dollar(
+  chars: List(Int),
+  current: List(Int),
+  done: List(String),
+) -> List(String) {
+  case parse_dollar(chars) {
+    Ok(#(tag, after)) -> scan_dollar(tag, after, current, done)
+    Error(_) -> scan_code(chars, [36, ..current], done)
   }
 }
 
 fn scan_dollar(
   tag: String,
-  chars: List(String),
-  current: List(String),
+  chars: List(Int),
+  current: List(Int),
   done: List(String),
 ) -> List(String) {
-  scan_dollar_body(string.to_graphemes(tag <> "$"), tag, chars, current, done)
+  let tag_codes = to_codepoints(tag)
+  let delimiter = list.append([36], list.append(tag_codes, [36]))
+  let closing = list.append(tag_codes, [36])
+  scan_dollar_body(closing, delimiter, chars, emit(delimiter, current), done)
 }
 
 fn scan_dollar_body(
-  closing: List(String),
-  tag: String,
-  chars: List(String),
-  current: List(String),
+  closing: List(Int),
+  delimiter: List(Int),
+  chars: List(Int),
+  current: List(Int),
   done: List(String),
 ) -> List(String) {
   case chars {
     [] -> finish(current, done)
-    ["$", ..rest] ->
+    [36, ..rest] ->
       case drop_prefix(rest, closing) {
-        Ok(after) -> scan_code(after, [dollar_delimiter(tag), ..current], done)
-        Error(_) -> scan_dollar_body(closing, tag, rest, ["$", ..current], done)
+        Ok(after) -> scan_code(after, emit(delimiter, current), done)
+        Error(_) ->
+          scan_dollar_body(closing, delimiter, rest, [36, ..current], done)
       }
     [char, ..rest] ->
-      scan_dollar_body(closing, tag, rest, [char, ..current], done)
+      scan_dollar_body(closing, delimiter, rest, [char, ..current], done)
   }
 }
 
 fn scan_line_comment(
-  chars: List(String),
-  current: List(String),
+  chars: List(Int),
+  current: List(Int),
   done: List(String),
 ) -> List(String) {
   case chars {
     [] -> finish(current, done)
-    ["\n", ..rest] -> scan_code(rest, ["\n", ..current], done)
+    [10, ..rest] -> scan_code(rest, [10, ..current], done)
+    [13, ..rest] -> scan_code(rest, [13, ..current], done)
     [_, ..rest] -> scan_line_comment(rest, current, done)
   }
 }
 
 fn scan_block_comment(
   depth: Int,
-  chars: List(String),
-  current: List(String),
+  chars: List(Int),
+  current: List(Int),
   done: List(String),
 ) -> List(String) {
   case chars {
-    [] -> finish(current, done)
-    ["/", "*", ..rest] -> scan_block_comment(depth + 1, rest, current, done)
-    ["*", "/", ..rest] ->
+    // Unterminated: keep the opening marker so PostgreSQL errors on it
+    // rather than silently applying a truncated statement.
+    [] -> finish(emit([47, 42], current), done)
+    [47, 42, ..rest] -> scan_block_comment(depth + 1, rest, current, done)
+    [42, 47, ..rest] ->
       case depth {
-        1 -> scan_code(rest, [" ", ..current], done)
+        1 -> scan_code(rest, [32, ..current], done)
         _ -> scan_block_comment(depth - 1, rest, current, done)
       }
     [_, ..rest] -> scan_block_comment(depth, rest, current, done)
@@ -212,17 +248,17 @@ fn scan_block_comment(
 
 /// Match a dollar-quote opener at `chars` (the text after the leading `$`)
 /// and return its tag plus the text after the closing `$`.
-fn parse_dollar(chars: List(String)) -> Result(#(String, List(String)), Nil) {
+fn parse_dollar(chars: List(Int)) -> Result(#(String, List(Int)), Nil) {
   case chars {
-    ["$", ..after] -> Ok(#("", after))
+    [36, ..after] -> Ok(#("", after))
     _ -> parse_dollar_tag(chars, [])
   }
 }
 
 fn parse_dollar_tag(
-  chars: List(String),
-  tag: List(String),
-) -> Result(#(String, List(String)), Nil) {
+  chars: List(Int),
+  tag: List(Int),
+) -> Result(#(String, List(Int)), Nil) {
   case chars {
     [] -> Error(Nil)
     [char, ..rest] ->
@@ -230,8 +266,8 @@ fn parse_dollar_tag(
         True -> parse_dollar_tag(rest, [char, ..tag])
         False ->
           case char, tag {
-            "$", [] -> Error(Nil)
-            "$", _ -> Ok(#(string.join(list.reverse(tag), ""), rest))
+            36, [] -> Error(Nil)
+            36, _ -> Ok(#(codepoints_to_string(list.reverse(tag)), rest))
             _, _ -> Error(Nil)
           }
       }
@@ -239,31 +275,42 @@ fn parse_dollar_tag(
 }
 
 /// A dollar-quote tag is an empty string or an identifier: its first
-/// character is an ASCII letter or `_`, later ones may also be digits.
-fn is_tag_char(char: String, tag: List(String)) -> Bool {
+/// character is a letter or `_`, later ones may also be digits. `$` itself
+/// is not allowed in a tag.
+fn is_tag_char(code: Int, tag: List(Int)) -> Bool {
   case tag {
-    [] -> is_letter(char) || char == "_"
-    _ -> is_letter(char) || is_digit(char) || char == "_"
+    [] -> is_letter(code) || code == 95
+    _ -> is_letter(code) || is_digit(code) || code == 95
   }
 }
 
-fn is_letter(char: String) -> Bool {
-  string.contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", char)
+/// Letters, digits, `_`, and `$`. PostgreSQL identifiers allow letters
+/// (including any non-ASCII character), digits, `_`, and `$` after the
+/// first character; this is used both for dollar-quote tags and to tell a
+/// `$` inside an unquoted identifier from a dollar-quote opener.
+fn is_letter(code: Int) -> Bool {
+  code >= 97 && code <= 122 || code >= 65 && code <= 90 || code >= 128
 }
 
-fn is_digit(char: String) -> Bool {
-  string.contains("0123456789", char)
+fn is_digit(code: Int) -> Bool {
+  code >= 48 && code <= 57
 }
 
-fn dollar_delimiter(tag: String) -> String {
-  "$" <> tag <> "$"
+fn is_ident_continue(code: Int) -> Bool {
+  is_letter(code) || is_digit(code) || code == 95 || code == 36
+}
+
+fn to_codepoints(value: String) -> List(Int) {
+  value |> string.to_utf_codepoints |> list.map(string.utf_codepoint_to_int)
+}
+
+/// Append `sequence` (in order) onto the reversed `current` buffer.
+fn emit(sequence: List(Int), current: List(Int)) -> List(Int) {
+  list.append(list.reverse(sequence), current)
 }
 
 /// Drop `prefix` from the front of `chars`, or fail if it does not match.
-fn drop_prefix(
-  chars: List(String),
-  prefix: List(String),
-) -> Result(List(String), Nil) {
+fn drop_prefix(chars: List(Int), prefix: List(Int)) -> Result(List(Int), Nil) {
   case prefix {
     [] -> Ok(chars)
     [expected, ..more] ->
@@ -274,9 +321,18 @@ fn drop_prefix(
   }
 }
 
+fn codepoints_to_string(codepoints: List(Int)) -> String {
+  codepoints |> list.map(codepoint) |> string.from_utf_codepoints
+}
+
+fn codepoint(value: Int) -> UtfCodepoint {
+  let assert Ok(cp) = string.utf_codepoint(value)
+  cp
+}
+
 /// Close the current statement: trim it, keep it if non-empty.
-fn finish(current: List(String), done: List(String)) -> List(String) {
-  case string.trim(string.join(list.reverse(current), "")) {
+fn finish(current: List(Int), done: List(String)) -> List(String) {
+  case string.trim(codepoints_to_string(list.reverse(current))) {
     "" -> done
     statement -> [statement, ..done]
   }

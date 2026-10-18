@@ -96,3 +96,38 @@ pub fn unterminated_dollar_quote_is_kept_test() {
   migrate.statements("do $$ begin; ")
   |> should.equal(["do $$ begin;"])
 }
+
+pub fn crlf_line_comment_test() {
+  migrate.statements("-- header\r\ncreate table t (id int);\r\nselect 2;\r\n")
+  |> should.equal(["create table t (id int)", "select 2"])
+}
+
+pub fn bare_cr_line_comment_test() {
+  migrate.statements("-- header\rcreate table t (id int);\rselect 2;\r")
+  |> should.equal(["create table t (id int)", "select 2"])
+}
+
+pub fn crlf_does_not_break_literals_test() {
+  migrate.statements("insert into t values ('a;b');\r\nselect 2;\r\n")
+  |> should.equal(["insert into t values ('a;b')", "select 2"])
+}
+
+pub fn dollar_in_unquoted_identifier_test() {
+  migrate.statements("create table audit$log$ (id int); select 2;")
+  |> should.equal(["create table audit$log$ (id int)", "select 2"])
+}
+
+pub fn unterminated_block_comment_keeps_marker_test() {
+  migrate.statements("create table t (id int) /* unfinished")
+  |> should.equal(["create table t (id int) /*"])
+}
+
+pub fn unterminated_block_comment_only_test() {
+  migrate.statements("/* unfinished")
+  |> should.equal(["/*"])
+}
+
+pub fn non_ascii_dollar_quote_tag_test() {
+  migrate.statements("do $é$ begin; perform 1; end; $é$;select 2;")
+  |> should.equal(["do $é$ begin; perform 1; end; $é$", "select 2"])
+}
