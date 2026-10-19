@@ -36,7 +36,7 @@
 
 import gleam/dict
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import glopenai/chat.{type ChatMessage}
 import nexus/session
@@ -47,6 +47,9 @@ import nexus/transcript.{type Transcript}
 pub type StoredSummary {
   StoredSummary(
     id: String,
+    /// The pinned provider (frozen at creation with the model, contract
+    /// rule 2; `session.provider_id` → `provider.id`).
+    provider_id: String,
     title: String,
     title_source: session.TitleSource,
     model: String,
@@ -68,6 +71,34 @@ pub type StoredSummary {
 /// `NEXUS_SYSTEM_PROMPT` changed between runs.
 pub type StoredSession {
   StoredSession(summary: StoredSummary, system_prompt: String)
+}
+
+/// A stored provider row — **ciphertext only**. `api_key_encrypted` is
+/// the `nexus/crypto` envelope; the store never sees plaintext keys
+/// (encryption lives in the provider registry, so this seam and its
+/// mocks stay secret-free). `None` = a keyless provider (local
+/// endpoints).
+pub type StoredProvider {
+  StoredProvider(
+    id: String,
+    /// Display + lookup key (unique).
+    name: String,
+    /// OpenAI-compatible base URL, ends `/v1`.
+    base_url: String,
+    /// AES-256-GCM envelope (`0x01 || nonce(12) || tag(16) ||
+    /// ciphertext`, AAD = provider id); `None` = keyless.
+    api_key_encrypted: Option(BitArray),
+    /// Envelope key version — 1 today; exists so rotation is additive.
+    key_version: Int,
+    /// Always `'openai'` today; exists so future dialects need no
+    /// schema change.
+    dialect: String,
+    enabled: Bool,
+    /// Epoch seconds.
+    created_at: Int,
+    /// Epoch seconds; bumped on update.
+    updated_at: Int,
+  )
 }
 
 /// One append-only message row. The write shape and the read shape are the
@@ -132,6 +163,26 @@ pub type Store {
     /// first commit) from being deleted under its live actor. Returns
     /// the deleted ids; an error leaves the store untouched.
     prune_never_used: fn() -> Result(List(String), StoreError),
+    // ---- provider rows (docs/plans/multi-provider.md §5.3) ----
+    /// Every stored provider, ordered by id (registry boot load). The
+    /// ciphertext rides along: decryption lives in the registry.
+    list_providers: fn() -> Result(List(StoredProvider), StoreError),
+    /// One stored provider incl. envelope. `Error` for unknown ids.
+    get_provider: fn(String) -> Result(StoredProvider, StoreError),
+    /// Persist a new provider row (write-through at create). Errors on
+    /// duplicate id or name, like the schema's constraints.
+    insert_provider: fn(StoredProvider) -> Result(Nil, StoreError),
+    /// Full-metadata update. `replace_key = False` keeps the stored
+    /// envelope and `key_version` — a PATCH without an api_key must not
+    /// null the key; `True` writes `api_key_encrypted` from the record,
+    /// where `None` means become keyless.
+    update_provider: fn(StoredProvider, Bool) -> Result(Nil, StoreError),
+    /// Sessions pinning this provider — the registry's delete guard.
+    count_sessions_for_provider: fn(String) -> Result(Int, StoreError),
+    /// Hard delete; refused (`Error`) while any session references the
+    /// provider (the FK is the enforcement). Disabling is the
+    /// reversible path.
+    delete_provider: fn(String) -> Result(Nil, StoreError),
   )
 }
 

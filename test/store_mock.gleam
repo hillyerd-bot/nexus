@@ -9,10 +9,11 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
+import gleam/option.{None}
 import gleam/otp/actor
 import gleam/string
 import nexus/session
-import nexus/store.{type Store, type StoredSummary}
+import nexus/store.{type Store, type StoredProvider, type StoredSummary}
 import nexus/timing
 import nexus/transcript.{type Transcript}
 
@@ -30,6 +31,9 @@ pub type Event {
   EvDeleteSession(id: String)
   /// One boot sweep: the ids it deleted (sorted).
   EvPruneNeverUsed(ids: List(String))
+  EvInsertProvider(id: String)
+  EvUpdateProvider(id: String)
+  EvDeleteProvider(id: String)
 }
 
 pub type MockMsg {
@@ -59,9 +63,22 @@ pub type MockMsg {
   /// Mirrors `prune_never_used.sql` (see the seam's docs in
   /// `nexus/store`): bulk boot sweep, replying with the deleted ids.
   PruneNeverUsed(reply: Subject(Result(List(String), String)))
+  // ---- provider rows (docs/plans/multi-provider.md §5.3) ----
+  ListProviders(reply: Subject(Result(List(StoredProvider), String)))
+  GetProvider(id: String, reply: Subject(Result(store.StoredProvider, String)))
+  InsertProvider(provider: StoredProvider, reply: Subject(Result(Nil, String)))
+  UpdateProvider(
+    provider: StoredProvider,
+    replace_key: Bool,
+    reply: Subject(Result(Nil, String)),
+  )
+  CountSessionsForProvider(id: String, reply: Subject(Result(Int, String)))
+  DeleteProvider(id: String, reply: Subject(Result(Nil, String)))
   // ---- test-only introspection ----
   Events(reply: Subject(List(Event)))
   Rows(reply: Subject(List(#(String, List(store.MessageRow)))))
+  /// Every stored provider, id-sorted — for direct row assertions.
+  Providers(reply: Subject(List(StoredProvider)))
   /// Test-only: truncate a session's stored rows back to `keep_rows` and
   /// its persisted message count to `messages` to model a crash between
   /// commits — the next Commit re-emits the delta, which is exactly the
@@ -84,14 +101,55 @@ type Stored {
 }
 
 type State {
-  State(sessions: Dict(String, Stored), events: List(Event))
+  State(
+    sessions: Dict(String, Stored),
+    providers: Dict(String, store.StoredProvider),
+    events: List(Event),
+  )
+}
+
+/// The provider id that test fixtures pin their sessions to — the
+/// P1 stand-in for a real provider source (`session.provider_id` is NOT
+/// NULL, so every stored session needs one).
+pub const fixture_provider_id = "p-test"
+
+/// A keyless fixture provider row (ciphertext in, ciphertext out: the
+/// mock never sees plaintext either).
+pub fn fixture_provider() -> StoredProvider {
+  let now = timing.wall_now_s()
+  store.StoredProvider(
+    id: fixture_provider_id,
+    name: "fixture",
+    base_url: "http://fixture.test/v1",
+    api_key_encrypted: None,
+    key_version: 1,
+    dialect: "openai",
+    enabled: True,
+    created_at: now,
+    updated_at: now,
+  )
+}
+
+/// Idempotently create the fixture provider through the seam — call
+/// before seeding sessions or booting a registry over the mock, since
+/// `insert_session` enforces the provider FK like the real store.
+pub fn ensure_fixture_provider(seam: Store) -> Nil {
+  case seam.get_provider(fixture_provider_id) {
+    Ok(_) -> Nil
+    Error(_) -> {
+      let assert Ok(Nil) = seam.insert_provider(fixture_provider())
+      Nil
+    }
+  }
 }
 
 /// Start the mock store actor; returns its subject.
 pub fn start() -> Subject(MockMsg) {
   let assert Ok(started) =
     actor.new_with_initialiser(1000, fn(self) {
-      actor.initialised(State(sessions: dict.new(), events: []))
+      actor.initialised(
+        State(sessions: dict.new(), providers: dict.new(), events: []),
+      )
       |> actor.returning(self)
       |> Ok
     })
@@ -124,6 +182,20 @@ pub fn seam(mock: Subject(MockMsg)) -> Store {
     unarchive: fn(id) { call(mock, 5000, fn(r) { Unarchive(id, r) }) },
     delete_session: fn(id) { call(mock, 5000, fn(r) { DeleteSession(id, r) }) },
     prune_never_used: fn() { call(mock, 5000, PruneNeverUsed) },
+    list_providers: fn() { call(mock, 5000, ListProviders) },
+    get_provider: fn(id) { call(mock, 5000, fn(r) { GetProvider(id, r) }) },
+    insert_provider: fn(provider) {
+      call(mock, 5000, fn(r) { InsertProvider(provider, r) })
+    },
+    update_provider: fn(provider, replace_key) {
+      call(mock, 5000, fn(r) { UpdateProvider(provider, replace_key, r) })
+    },
+    count_sessions_for_provider: fn(id) {
+      call(mock, 5000, fn(r) { CountSessionsForProvider(id, r) })
+    },
+    delete_provider: fn(id) {
+      call(mock, 5000, fn(r) { DeleteProvider(id, r) })
+    },
   )
 }
 
@@ -139,6 +211,12 @@ pub fn events(mock: Subject(MockMsg)) -> List(Event) {
 /// Every session's rows, id-sorted — for direct row assertions.
 pub fn rows(mock: Subject(MockMsg)) -> List(#(String, List(store.MessageRow))) {
   call(mock, 5000, Rows)
+}
+
+/// Every stored provider, id-sorted — for direct row assertions
+/// (envelopes included: the mock holds ciphertext, like the real store).
+pub fn providers(mock: Subject(MockMsg)) -> List(store.StoredProvider) {
+  call(mock, 5000, Providers)
 }
 
 /// Truncate a session's stored rows (models a crash between commits so
@@ -232,19 +310,29 @@ fn handle(state: State, msg: MockMsg) -> actor.Next(State, MockMsg) {
         }
       }
 
-    InsertSession(summary, system_prompt, reply) -> {
-      process.send(reply, Ok(Nil))
-      actor.continue(
-        State(
-          sessions: dict.insert(
-            state.sessions,
-            summary.id,
-            Stored(summary, system_prompt, [], summary.message_count),
-          ),
-          events: [EvInsertSession(summary.id), ..state.events],
-        ),
-      )
-    }
+    InsertSession(summary, system_prompt, reply) ->
+      // session_provider_id_fkey: the pinned provider must exist, like
+      // the real store's FK refuses unknown ids.
+      case dict.get(state.providers, summary.provider_id) {
+        Error(_) -> {
+          process.send(reply, Error("unknown provider " <> summary.provider_id))
+          actor.continue(state)
+        }
+        Ok(_) -> {
+          process.send(reply, Ok(Nil))
+          actor.continue(
+            State(
+              ..state,
+              sessions: dict.insert(
+                state.sessions,
+                summary.id,
+                Stored(summary, system_prompt, [], summary.message_count),
+              ),
+              events: [EvInsertSession(summary.id), ..state.events],
+            ),
+          )
+        }
+      }
 
     Commit(id, transcript) -> {
       let events = [EvCommit(id, transcript.length(transcript)), ..state.events]
@@ -279,7 +367,7 @@ fn handle(state: State, msg: MockMsg) -> actor.Next(State, MockMsg) {
           }
         }
       }
-      actor.continue(State(sessions: sessions, events: events))
+      actor.continue(State(..state, sessions: sessions, events: events))
     }
 
     SetTitle(id, title, reply) -> {
@@ -375,7 +463,7 @@ fn handle(state: State, msg: MockMsg) -> actor.Next(State, MockMsg) {
     DeleteSession(id, reply) -> {
       process.send(reply, Ok(Nil))
       actor.continue(
-        State(sessions: dict.delete(state.sessions, id), events: [
+        State(..state, sessions: dict.delete(state.sessions, id), events: [
           EvDeleteSession(id),
           ..state.events
         ]),
@@ -404,7 +492,7 @@ fn handle(state: State, msg: MockMsg) -> actor.Next(State, MockMsg) {
         [] -> state.events
         _ -> [EvPruneNeverUsed(ids), ..state.events]
       }
-      actor.continue(State(sessions: sessions, events: events))
+      actor.continue(State(..state, sessions: sessions, events: events))
     }
 
     Events(reply) -> {
@@ -420,6 +508,167 @@ fn handle(state: State, msg: MockMsg) -> actor.Next(State, MockMsg) {
         |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
       process.send(reply, rows)
       actor.continue(state)
+    }
+
+    Providers(reply) -> {
+      let providers =
+        state.providers
+        |> dict.values
+        |> list.sort(fn(a, b) { string.compare(a.id, b.id) })
+      process.send(reply, providers)
+      actor.continue(state)
+    }
+
+    ListProviders(reply) -> {
+      let providers =
+        state.providers
+        |> dict.values
+        |> list.sort(fn(a, b) { string.compare(a.id, b.id) })
+      process.send(reply, Ok(providers))
+      actor.continue(state)
+    }
+
+    GetProvider(id, reply) ->
+      case dict.get(state.providers, id) {
+        Ok(provider) -> {
+          process.send(reply, Ok(provider))
+          actor.continue(state)
+        }
+        Error(_) -> {
+          process.send(reply, Error("no stored provider " <> id))
+          actor.continue(state)
+        }
+      }
+
+    InsertProvider(provider, reply) ->
+      // provider_pkey + provider_name_key, like the schema's constraints.
+      case
+        dict.has_key(state.providers, provider.id),
+        list.any(dict.values(state.providers), fn(existing) {
+          existing.name == provider.name
+        })
+      {
+        True, _ -> {
+          process.send(reply, Error("provider " <> provider.id <> " exists"))
+          actor.continue(state)
+        }
+        False, True -> {
+          process.send(
+            reply,
+            Error("provider name " <> provider.name <> " exists"),
+          )
+          actor.continue(state)
+        }
+        False, False -> {
+          process.send(reply, Ok(Nil))
+          actor.continue(
+            State(
+              ..state,
+              providers: dict.insert(state.providers, provider.id, provider),
+              events: [EvInsertProvider(provider.id), ..state.events],
+            ),
+          )
+        }
+      }
+
+    UpdateProvider(provider, replace_key, reply) ->
+      case dict.get(state.providers, provider.id) {
+        // Like the SQL `update ... where id = $1`: a missing row is a
+        // silent no-op, not an error.
+        Error(_) -> {
+          process.send(reply, Ok(Nil))
+          actor.continue(state)
+        }
+        Ok(stored) -> {
+          // provider_name_key: renaming onto another provider's name is
+          // refused, like the schema's UNIQUE constraint — no state
+          // change, no event.
+          case
+            list.any(dict.values(state.providers), fn(existing) {
+              existing.id != provider.id && existing.name == provider.name
+            })
+          {
+            True -> {
+              process.send(
+                reply,
+                Error("provider name " <> provider.name <> " exists"),
+              )
+              actor.continue(state)
+            }
+            False -> {
+              // update_provider.sql's SET list is name / base_url /
+              // the gated key fields / enabled, with `updated_at =
+              // now()` server-side: created_at and dialect stay from
+              // the stored row. The mock mirrors that exactly, so
+              // identical updates produce identical metadata through
+              // either implementation.
+              let updated =
+                store.StoredProvider(
+                  ..provider,
+                  created_at: stored.created_at,
+                  dialect: stored.dialect,
+                  updated_at: timing.wall_now_s(),
+                  api_key_encrypted: case replace_key {
+                    True -> provider.api_key_encrypted
+                    False -> stored.api_key_encrypted
+                  },
+                  key_version: case replace_key {
+                    True -> provider.key_version
+                    False -> stored.key_version
+                  },
+                )
+              process.send(reply, Ok(Nil))
+              actor.continue(
+                State(
+                  ..state,
+                  providers: dict.insert(state.providers, provider.id, updated),
+                  events: [EvUpdateProvider(provider.id), ..state.events],
+                ),
+              )
+            }
+          }
+        }
+      }
+
+    CountSessionsForProvider(id, reply) -> {
+      let count =
+        state.sessions
+        |> dict.values
+        |> list.filter(fn(stored) { stored.summary.provider_id == id })
+        |> list.length
+      process.send(reply, Ok(count))
+      actor.continue(state)
+    }
+
+    DeleteProvider(id, reply) -> {
+      // ON DELETE RESTRICT: the FK refuses while any session pins the
+      // provider (the count is the registry's friendly 409 pre-check).
+      let referenced =
+        state.sessions
+        |> dict.values
+        |> list.any(fn(stored) { stored.summary.provider_id == id })
+      case dict.has_key(state.providers, id), referenced {
+        False, _ -> {
+          process.send(reply, Ok(Nil))
+          actor.continue(state)
+        }
+        True, True -> {
+          process.send(
+            reply,
+            Error("provider " <> id <> " still pinned by sessions"),
+          )
+          actor.continue(state)
+        }
+        True, False -> {
+          process.send(reply, Ok(Nil))
+          actor.continue(
+            State(..state, providers: dict.delete(state.providers, id), events: [
+              EvDeleteProvider(id),
+              ..state.events
+            ]),
+          )
+        }
+      }
     }
 
     Rewind(id, keep_rows, messages, reply) -> {

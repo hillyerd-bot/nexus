@@ -170,7 +170,12 @@ fn create_session_response(
                   json_response(400, err_json("unknown model: " <> trimmed))
                 True ->
                   // Registry-owned runner: the frozen M3 toolset.
-                  case session_registry.create(registry, trimmed) {
+                  // P1 multi-provider interim: no provider source exists
+                  // yet (the provider registry lands in P2, the request
+                  // field in P4), so the pin is empty and the store's
+                  // write-through fails its FK — the session stays
+                  // in-memory only until then.
+                  case session_registry.create(registry, "", trimmed) {
                     Ok(record) -> {
                       let now = timing.wall_now_s()
                       json_response(

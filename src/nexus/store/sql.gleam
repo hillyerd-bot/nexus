@@ -169,6 +169,69 @@ where id = $2
   |> pog.execute(db)
 }
 
+/// A row you get from running the `count_sessions_for_provider` query
+/// defined in `./src/nexus/store/sql/count_sessions_for_provider.sql`.
+///
+/// > 🐿️ This type definition was generated automatically using v4.7.0 of the
+/// > [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub type CountSessionsForProviderRow {
+  CountSessionsForProviderRow(sessions: Int)
+}
+
+/// How many sessions pin this provider — the registry's delete guard
+/// (409 while > 0; prefer disabling).
+///
+/// > 🐿️ This function was generated automatically using v4.7.0 of
+/// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub fn count_sessions_for_provider(
+  db: pog.Connection,
+  provider_id: String,
+) -> Result(pog.Returned(CountSessionsForProviderRow), pog.QueryError) {
+  let decoder = {
+    use sessions <- decode.field(0, decode.int)
+    decode.success(CountSessionsForProviderRow(sessions:))
+  }
+
+  "-- How many sessions pin this provider — the registry's delete guard
+-- (409 while > 0; prefer disabling).
+select count(*)::int8 as sessions
+from session
+where provider_id = $1
+"
+  |> pog.query
+  |> pog.parameter(pog.text(provider_id))
+  |> pog.returning(decoder)
+  |> pog.execute(db)
+}
+
+/// Hard delete of an unreferenced provider. While any session pins it,
+/// the session_provider_id FK (ON DELETE RESTRICT) refuses the delete —
+/// the registry's count-based 409 pre-check is the friendly copy of that
+/// guard, this is the enforcement.
+///
+/// > 🐿️ This function was generated automatically using v4.7.0 of
+/// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub fn delete_provider(
+  db: pog.Connection,
+  id: String,
+) -> Result(pog.Returned(Nil), pog.QueryError) {
+  let decoder = decode.map(decode.dynamic, fn(_) { Nil })
+
+  "-- Hard delete of an unreferenced provider. While any session pins it,
+-- the session_provider_id FK (ON DELETE RESTRICT) refuses the delete —
+-- the registry's count-based 409 pre-check is the friendly copy of that
+-- guard, this is the enforcement.
+delete from provider where id = $1
+"
+  |> pog.query
+  |> pog.parameter(pog.text(id))
+  |> pog.returning(decoder)
+  |> pog.execute(db)
+}
+
 /// Runs the `delete_session` query
 /// defined in `./src/nexus/store/sql/delete_session.sql`.
 ///
@@ -189,6 +252,82 @@ pub fn delete_session(
   |> pog.execute(db)
 }
 
+/// A row you get from running the `get_provider` query
+/// defined in `./src/nexus/store/sql/get_provider.sql`.
+///
+/// > 🐿️ This type definition was generated automatically using v4.7.0 of the
+/// > [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub type GetProviderRow {
+  GetProviderRow(
+    id: String,
+    name: String,
+    base_url: String,
+    api_key_encrypted: Option(BitArray),
+    key_version: Int,
+    dialect: String,
+    enabled: Bool,
+    created_s: Int,
+    updated_s: Int,
+  )
+}
+
+/// One provider row by id. `Error` for unknown ids is decided by the
+/// caller from the empty result; the envelope rides along for the
+/// registry to decrypt (AAD = provider id).
+///
+/// > 🐿️ This function was generated automatically using v4.7.0 of
+/// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub fn get_provider(
+  db: pog.Connection,
+  id: String,
+) -> Result(pog.Returned(GetProviderRow), pog.QueryError) {
+  let decoder = {
+    use id <- decode.field(0, decode.string)
+    use name <- decode.field(1, decode.string)
+    use base_url <- decode.field(2, decode.string)
+    use api_key_encrypted <- decode.field(3, decode.optional(decode.bit_array))
+    use key_version <- decode.field(4, decode.int)
+    use dialect <- decode.field(5, decode.string)
+    use enabled <- decode.field(6, decode.bool)
+    use created_s <- decode.field(7, decode.int)
+    use updated_s <- decode.field(8, decode.int)
+    decode.success(GetProviderRow(
+      id:,
+      name:,
+      base_url:,
+      api_key_encrypted:,
+      key_version:,
+      dialect:,
+      enabled:,
+      created_s:,
+      updated_s:,
+    ))
+  }
+
+  "-- One provider row by id. `Error` for unknown ids is decided by the
+-- caller from the empty result; the envelope rides along for the
+-- registry to decrypt (AAD = provider id).
+select
+  id,
+  name,
+  base_url,
+  api_key_encrypted,
+  key_version,
+  dialect,
+  enabled,
+  extract(epoch from created_at)::int8 as created_s,
+  extract(epoch from updated_at)::int8 as updated_s
+from provider
+where id = $1
+"
+  |> pog.query
+  |> pog.parameter(pog.text(id))
+  |> pog.returning(decoder)
+  |> pog.execute(db)
+}
+
 /// A row you get from running the `get_session` query
 /// defined in `./src/nexus/store/sql/get_session.sql`.
 ///
@@ -198,6 +337,7 @@ pub fn delete_session(
 pub type GetSessionRow {
   GetSessionRow(
     id: String,
+    provider_id: String,
     title: String,
     title_source: String,
     model: String,
@@ -222,18 +362,20 @@ pub fn get_session(
 ) -> Result(pog.Returned(GetSessionRow), pog.QueryError) {
   let decoder = {
     use id <- decode.field(0, decode.string)
-    use title <- decode.field(1, decode.string)
-    use title_source <- decode.field(2, decode.string)
-    use model <- decode.field(3, decode.string)
-    use system_prompt <- decode.field(4, decode.string)
-    use pinned <- decode.field(5, decode.bool)
-    use archived <- decode.field(6, decode.bool)
-    use tags <- decode.field(7, decode.list(decode.string))
-    use created_s <- decode.field(8, decode.int)
-    use last_active_s <- decode.field(9, decode.int)
-    use message_count <- decode.field(10, decode.int)
+    use provider_id <- decode.field(1, decode.string)
+    use title <- decode.field(2, decode.string)
+    use title_source <- decode.field(3, decode.string)
+    use model <- decode.field(4, decode.string)
+    use system_prompt <- decode.field(5, decode.string)
+    use pinned <- decode.field(6, decode.bool)
+    use archived <- decode.field(7, decode.bool)
+    use tags <- decode.field(8, decode.list(decode.string))
+    use created_s <- decode.field(9, decode.int)
+    use last_active_s <- decode.field(10, decode.int)
+    use message_count <- decode.field(11, decode.int)
     decode.success(GetSessionRow(
       id:,
+      provider_id:,
       title:,
       title_source:,
       model:,
@@ -250,6 +392,7 @@ pub fn get_session(
   "-- One stored session row (lazy hydration of a dormant session).
 select
   id,
+  provider_id,
   title,
   title_source,
   model,
@@ -269,8 +412,50 @@ where id = $1
   |> pog.execute(db)
 }
 
+/// A new provider row. `api_key_encrypted` is the nexus/crypto envelope;
+/// the '' sentinel inserts NULL (a keyless provider) — Postgres exposes
+/// no parameter nullability, so squirrel parameters cannot be nullable
+/// and the sentinel is its documented workaround.
+///
+/// > 🐿️ This function was generated automatically using v4.7.0 of
+/// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub fn insert_provider(
+  db: pog.Connection,
+  arg_1: String,
+  arg_2: String,
+  arg_3: String,
+  arg_4: BitArray,
+  arg_5: Int,
+  arg_6: String,
+  arg_7: Bool,
+  arg_8: Float,
+) -> Result(pog.Returned(Nil), pog.QueryError) {
+  let decoder = decode.map(decode.dynamic, fn(_) { Nil })
+
+  "-- A new provider row. `api_key_encrypted` is the nexus/crypto envelope;
+-- the '' sentinel inserts NULL (a keyless provider) — Postgres exposes
+-- no parameter nullability, so squirrel parameters cannot be nullable
+-- and the sentinel is its documented workaround.
+insert into provider (id, name, base_url, api_key_encrypted, key_version, dialect, enabled, created_at, updated_at)
+values ($1, $2, $3, nullif($4, ''::bytea), $5, $6, $7, to_timestamp($8), to_timestamp($8))
+"
+  |> pog.query
+  |> pog.parameter(pog.text(arg_1))
+  |> pog.parameter(pog.text(arg_2))
+  |> pog.parameter(pog.text(arg_3))
+  |> pog.parameter(pog.bytea(arg_4))
+  |> pog.parameter(pog.int(arg_5))
+  |> pog.parameter(pog.text(arg_6))
+  |> pog.parameter(pog.bool(arg_7))
+  |> pog.parameter(pog.float(arg_8))
+  |> pog.returning(decoder)
+  |> pog.execute(db)
+}
+
 /// A new session row: created/last_active from the registry's epoch
 /// seconds; message_count is the transcript length (1 = system prompt).
+/// provider_id is frozen at creation with the model (contract rule 2).
 ///
 /// > 🐿️ This function was generated automatically using v4.7.0 of
 /// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
@@ -282,17 +467,19 @@ pub fn insert_session(
   arg_3: String,
   arg_4: String,
   arg_5: String,
-  arg_6: Bool,
-  arg_7: List(String),
-  arg_8: Float,
-  arg_9: Int,
+  arg_6: String,
+  arg_7: Bool,
+  arg_8: List(String),
+  arg_9: Float,
+  arg_10: Int,
 ) -> Result(pog.Returned(Nil), pog.QueryError) {
   let decoder = decode.map(decode.dynamic, fn(_) { Nil })
 
   "-- A new session row: created/last_active from the registry's epoch
 -- seconds; message_count is the transcript length (1 = system prompt).
-insert into session (id, title, title_source, model, system_prompt, pinned, tags, created_at, last_active_at, message_count)
-values ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($8), $9)
+-- provider_id is frozen at creation with the model (contract rule 2).
+insert into session (id, provider_id, title, title_source, model, system_prompt, pinned, tags, created_at, last_active_at, message_count)
+values ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9), to_timestamp($9), $10)
 "
   |> pog.query
   |> pog.parameter(pog.text(arg_1))
@@ -300,10 +487,85 @@ values ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($8), $9)
   |> pog.parameter(pog.text(arg_3))
   |> pog.parameter(pog.text(arg_4))
   |> pog.parameter(pog.text(arg_5))
-  |> pog.parameter(pog.bool(arg_6))
-  |> pog.parameter(pog.array(fn(value) { pog.text(value) }, arg_7))
-  |> pog.parameter(pog.float(arg_8))
-  |> pog.parameter(pog.int(arg_9))
+  |> pog.parameter(pog.text(arg_6))
+  |> pog.parameter(pog.bool(arg_7))
+  |> pog.parameter(pog.array(fn(value) { pog.text(value) }, arg_8))
+  |> pog.parameter(pog.float(arg_9))
+  |> pog.parameter(pog.int(arg_10))
+  |> pog.returning(decoder)
+  |> pog.execute(db)
+}
+
+/// A row you get from running the `list_providers` query
+/// defined in `./src/nexus/store/sql/list_providers.sql`.
+///
+/// > 🐿️ This type definition was generated automatically using v4.7.0 of the
+/// > [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub type ListProvidersRow {
+  ListProvidersRow(
+    id: String,
+    name: String,
+    base_url: String,
+    api_key_encrypted: Option(BitArray),
+    key_version: Int,
+    dialect: String,
+    enabled: Bool,
+    created_s: Int,
+    updated_s: Int,
+  )
+}
+
+/// All provider rows (boot load / registry cache refresh), ordered by id
+/// (the registry re-sorts). The store hands CIPHERTEXT to the registry —
+/// decryption lives there, never here.
+///
+/// > 🐿️ This function was generated automatically using v4.7.0 of
+/// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub fn list_providers(
+  db: pog.Connection,
+) -> Result(pog.Returned(ListProvidersRow), pog.QueryError) {
+  let decoder = {
+    use id <- decode.field(0, decode.string)
+    use name <- decode.field(1, decode.string)
+    use base_url <- decode.field(2, decode.string)
+    use api_key_encrypted <- decode.field(3, decode.optional(decode.bit_array))
+    use key_version <- decode.field(4, decode.int)
+    use dialect <- decode.field(5, decode.string)
+    use enabled <- decode.field(6, decode.bool)
+    use created_s <- decode.field(7, decode.int)
+    use updated_s <- decode.field(8, decode.int)
+    decode.success(ListProvidersRow(
+      id:,
+      name:,
+      base_url:,
+      api_key_encrypted:,
+      key_version:,
+      dialect:,
+      enabled:,
+      created_s:,
+      updated_s:,
+    ))
+  }
+
+  "-- All provider rows (boot load / registry cache refresh), ordered by id
+-- (the registry re-sorts). The store hands CIPHERTEXT to the registry —
+-- decryption lives there, never here.
+select
+  id,
+  name,
+  base_url,
+  api_key_encrypted,
+  key_version,
+  dialect,
+  enabled,
+  extract(epoch from created_at)::int8 as created_s,
+  extract(epoch from updated_at)::int8 as updated_s
+from provider
+order by id
+"
+  |> pog.query
   |> pog.returning(decoder)
   |> pog.execute(db)
 }
@@ -317,6 +579,7 @@ values ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($8), $9)
 pub type ListSummariesRow {
   ListSummariesRow(
     id: String,
+    provider_id: String,
     title: String,
     title_source: String,
     model: String,
@@ -339,17 +602,19 @@ pub fn list_summaries(
 ) -> Result(pog.Returned(ListSummariesRow), pog.QueryError) {
   let decoder = {
     use id <- decode.field(0, decode.string)
-    use title <- decode.field(1, decode.string)
-    use title_source <- decode.field(2, decode.string)
-    use model <- decode.field(3, decode.string)
-    use pinned <- decode.field(4, decode.bool)
-    use archived <- decode.field(5, decode.bool)
-    use tags <- decode.field(6, decode.list(decode.string))
-    use created_s <- decode.field(7, decode.int)
-    use last_active_s <- decode.field(8, decode.int)
-    use message_count <- decode.field(9, decode.int)
+    use provider_id <- decode.field(1, decode.string)
+    use title <- decode.field(2, decode.string)
+    use title_source <- decode.field(3, decode.string)
+    use model <- decode.field(4, decode.string)
+    use pinned <- decode.field(5, decode.bool)
+    use archived <- decode.field(6, decode.bool)
+    use tags <- decode.field(7, decode.list(decode.string))
+    use created_s <- decode.field(8, decode.int)
+    use last_active_s <- decode.field(9, decode.int)
+    use message_count <- decode.field(10, decode.int)
     decode.success(ListSummariesRow(
       id:,
+      provider_id:,
       title:,
       title_source:,
       model:,
@@ -365,6 +630,7 @@ pub fn list_summaries(
   "-- All stored session summaries, ordered by id (the registry re-sorts).
 select
   id,
+  provider_id,
   title,
   title_source,
   model,
@@ -596,6 +862,59 @@ where id = $1
 "
   |> pog.query
   |> pog.parameter(pog.text(id))
+  |> pog.returning(decoder)
+  |> pog.execute(db)
+}
+
+/// Full-metadata provider update. `replace_key` ($4) decides the key
+/// envelope's fate so a PATCH without an api_key keeps the stored
+/// ciphertext instead of nulling it:
+/// false → envelope and key_version untouched (key param ignored);
+/// true  → envelope := nullif($5, ''::bytea) — a real value replaces
+/// it, the '' sentinel goes keyless (NULL) — and key_version
+/// := $6. (Sentinel for the same reason as insert_provider.)
+/// updated_at is server-side now(), like the session metadata writes.
+///
+/// > 🐿️ This function was generated automatically using v4.7.0 of
+/// > the [squirrel package](https://github.com/giacomocavalieri/squirrel).
+///
+pub fn update_provider(
+  db: pog.Connection,
+  id: String,
+  arg_2: String,
+  arg_3: String,
+  arg_4: Bool,
+  arg_5: BitArray,
+  arg_6: Int,
+  arg_7: Bool,
+) -> Result(pog.Returned(Nil), pog.QueryError) {
+  let decoder = decode.map(decode.dynamic, fn(_) { Nil })
+
+  "-- Full-metadata provider update. `replace_key` ($4) decides the key
+-- envelope's fate so a PATCH without an api_key keeps the stored
+-- ciphertext instead of nulling it:
+--   false → envelope and key_version untouched (key param ignored);
+--   true  → envelope := nullif($5, ''::bytea) — a real value replaces
+--           it, the '' sentinel goes keyless (NULL) — and key_version
+--           := $6. (Sentinel for the same reason as insert_provider.)
+-- updated_at is server-side now(), like the session metadata writes.
+update provider set
+  name = $2,
+  base_url = $3,
+  api_key_encrypted = case when $4 then nullif($5, ''::bytea) else api_key_encrypted end,
+  key_version = case when $4 then $6 else key_version end,
+  enabled = $7,
+  updated_at = now()
+where id = $1
+"
+  |> pog.query
+  |> pog.parameter(pog.text(id))
+  |> pog.parameter(pog.text(arg_2))
+  |> pog.parameter(pog.text(arg_3))
+  |> pog.parameter(pog.bool(arg_4))
+  |> pog.parameter(pog.bytea(arg_5))
+  |> pog.parameter(pog.int(arg_6))
+  |> pog.parameter(pog.bool(arg_7))
   |> pog.returning(decoder)
   |> pog.execute(db)
 }

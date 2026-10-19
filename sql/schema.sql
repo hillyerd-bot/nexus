@@ -6,7 +6,9 @@
 --
 -- The schema maps 1:1 onto the Phase 1 `SessionSummary` field set
 -- (src/nexus/session.gleam): id, title, title_source, model, system_prompt,
--- pinned, archived, tags, created_at, last_active_at, message_count.
+-- pinned, archived, tags, created_at, last_active_at, message_count —
+-- plus the multi-provider link `provider_id`
+-- (docs/plans/multi-provider.md).
 --
 -- Timestamps are `timestamptz` (see docs/plans/p2-verification.md for the
 -- spike outcome): the app reads them as epoch seconds via
@@ -21,9 +23,39 @@
 -- - message bodies stay plain text so FTS can be added later as a
 --   tsvector generated column + index — no FTS now.
 -- - MetricSample history stays in memory; persisting it is out of scope.
+--
+-- Provider design notes (docs/plans/multi-provider.md §5):
+-- - `provider` is declared BEFORE `session`: the `session.provider_id`
+--   FK target must exist first.
+-- - `api_key_encrypted` is the nexus/crypto AES-256-GCM envelope
+--   (`0x01 || nonce(12) || tag(16) || ciphertext`, AAD = provider id);
+--   NULL means a keyless provider (local Ollama / llama.cpp endpoints).
+--   The store only ever moves ciphertext — encryption lives in the
+--   provider registry.
+-- - `key_version` is 1 today; the column makes later rotation additive.
+-- - `dialect` is always 'openai' today; the column keeps future dialects
+--   a data change, not a schema change.
+-- - `ON DELETE RESTRICT` + the registry's `409` pre-check: deleting a
+--   referenced provider is refused; disabling is the reversible path.
+
+CREATE TABLE IF NOT EXISTS provider (
+  id                 text PRIMARY KEY,
+  name               text NOT NULL UNIQUE,          -- display + lookup key
+  base_url           text NOT NULL,                 -- OpenAI-compatible, ends /v1
+  api_key_encrypted  bytea,                         -- NULL = keyless (local endpoints)
+  key_version        int NOT NULL DEFAULT 1,
+  dialect            text NOT NULL DEFAULT 'openai',-- future: 'anthropic', …
+  enabled            boolean NOT NULL DEFAULT true,
+  created_at         timestamptz NOT NULL,
+  updated_at         timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS provider_enabled ON provider (enabled);
 
 CREATE TABLE IF NOT EXISTS session (
   id             text PRIMARY KEY,             -- existing user-visible session id
+  provider_id    text NOT NULL REFERENCES provider(id) ON DELETE RESTRICT,
+                                                -- frozen at creation with the model (contract rule 2)
   title          text NOT NULL,
   title_source   text NOT NULL DEFAULT 'auto', -- 'auto' | 'manual'
   model          text NOT NULL,                -- frozen alias (contract rule 2)

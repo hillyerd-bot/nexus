@@ -78,12 +78,17 @@ pub type CreateError {
 }
 
 pub type Msg {
-  /// Start a new session for `model` using the registry's frozen tool
-  /// runner (built once at registry start, so the tool schema is identical
-  /// in every request of every session).
-  Create(model: String, reply: Subject(Result(SessionRecord, CreateError)))
+  /// Start a new session pinned to `provider_id` + `model` using the
+  /// registry's frozen tool runner (built once at registry start, so the
+  /// tool schema is identical in every request of every session).
+  Create(
+    provider_id: String,
+    model: String,
+    reply: Subject(Result(SessionRecord, CreateError)),
+  )
   /// Test seam: start a session with an injected runner.
   CreateWithRunner(
+    provider_id: String,
     model: String,
     runner: session.TurnRunner,
     reply: Subject(Result(SessionRecord, CreateError)),
@@ -360,10 +365,11 @@ fn boot_sweep(persistence: Store) -> List(String) {
 
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
-    Create(model, reply) -> handle_create(state, model, state.runner, reply)
+    Create(provider_id, model, reply) ->
+      handle_create(state, provider_id, model, state.runner, reply)
 
-    CreateWithRunner(model, runner, reply) ->
-      handle_create(state, model, runner, reply)
+    CreateWithRunner(provider_id, model, runner, reply) ->
+      handle_create(state, provider_id, model, runner, reply)
 
     _ -> handle_rest(state, msg)
   }
@@ -371,6 +377,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
 fn handle_create(
   state: State,
+  provider_id: String,
   model: String,
   runner: session.TurnRunner,
   reply: Subject(Result(SessionRecord, CreateError)),
@@ -407,6 +414,7 @@ fn handle_create(
             state.store.insert_session(
               store.StoredSummary(
                 id: id,
+                provider_id: provider_id,
                 title: "",
                 title_source: session.AutoTitle,
                 model: alias,
@@ -1148,19 +1156,21 @@ fn restart(
 
 pub fn create(
   registry: Subject(Msg),
+  provider_id: String,
   model: String,
 ) -> Result(SessionRecord, CreateError) {
-  actor.call(registry, 5000, fn(reply) { Create(model:, reply:) })
+  actor.call(registry, 5000, fn(reply) { Create(provider_id:, model:, reply:) })
 }
 
 /// Test seam: create a session with an injected turn runner.
 pub fn create_with_runner(
   registry: Subject(Msg),
+  provider_id: String,
   model: String,
   runner: session.TurnRunner,
 ) -> Result(SessionRecord, CreateError) {
   actor.call(registry, 5000, fn(reply) {
-    CreateWithRunner(model:, runner:, reply:)
+    CreateWithRunner(provider_id:, model:, runner:, reply:)
   })
 }
 

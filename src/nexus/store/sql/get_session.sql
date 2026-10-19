@@ -1,6 +1,7 @@
 -- One stored session row (lazy hydration of a dormant session).
 select
   id,
+  provider_id,
   title,
   title_source,
   model,

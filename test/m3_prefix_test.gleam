@@ -282,7 +282,12 @@ pub fn golden_metadata_never_alters_request_bytes_test() {
   let opts = loop_options()
   let registry = start_registry()
   let assert Ok(record) =
-    session_registry.create_with_runner(registry, fixture.alias, happy_runner)
+    session_registry.create_with_runner(
+      registry,
+      store_mock.fixture_provider_id,
+      fixture.alias,
+      happy_runner,
+    )
 
   // The first user message, exactly like the HTTP send boundary: auto-title
   // from its text (never an LLM call, never into the body).
@@ -340,12 +345,14 @@ fn start_registry() -> process.Subject(session_registry.Msg) {
   let factory_name = process.new_name("nexus_m3_factory")
   let assert Ok(_factory) =
     factory_supervisor.start(session_registry.factory_builder(factory_name))
+  let persistence = store_mock.seam(store_mock.start())
+  store_mock.ensure_fixture_provider(persistence)
   let assert Ok(started) =
     session_registry.start(
       smoke_config(),
       factory_supervisor.get_by_name(factory_name),
       process.new_name("nexus_m3_registry"),
-      store_mock.seam(store_mock.start()),
+      persistence,
     )
   started.data
 }
