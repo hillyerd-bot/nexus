@@ -72,7 +72,8 @@ pub type RegistryError {
   KeyOperationFailed
   /// The store refused or failed; carries the seam's sanitized text.
   StoreFailed(String)
-  /// Live model list failed; carries a sanitized transport reason.
+  /// Live model list failed; carries fixed public text — the upstream
+  /// status at most, never bodies or inspected transport details.
   ModelsFailed(String)
 }
 
@@ -598,13 +599,17 @@ fn encrypt_maybe(
   }
 }
 
-/// Sanitized text for a failed live model list (provider response
-/// bodies, never key material).
-fn describe_stream_error(error: openai.StreamError) -> String {
+/// Fixed public text for a failed live model list. Upstream bodies,
+/// transport reasons (string.inspect of the hackney error), and decode
+/// details are dropped on purpose: a provider may echo a rejected
+/// bearer key back in its error body, so only the numeric status is
+/// safe to surface. CLI callers of `openai.list_models` (the audit
+/// tools) still see full detail directly from the seam.
+pub fn describe_stream_error(error: openai.StreamError) -> String {
   case error {
-    openai.Non200(status, body) ->
-      "model list failed: HTTP " <> int.to_string(status) <> ": " <> body
-    openai.Transport(reason) -> "model list failed: " <> reason
-    openai.Decode(reason) -> "model list failed: decode " <> reason
+    openai.Non200(status, _body) ->
+      "model list failed: HTTP " <> int.to_string(status)
+    openai.Transport(_reason) -> "model list failed: transport error"
+    openai.Decode(_reason) -> "model list failed: unreadable model list"
   }
 }

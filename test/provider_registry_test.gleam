@@ -13,6 +13,7 @@ import gleam/otp/actor
 import gleeunit/should
 import nexus/config
 import nexus/crypto
+import nexus/openai
 import nexus/provider
 import nexus/provider_registry
 import nexus/session
@@ -320,6 +321,14 @@ pub fn update_without_key_keeps_envelope_test() {
     })
   let before = first_envelope(mock)
 
+  // Populate the memo BEFORE patching, so the post-update assertions
+  // actually exercise memo invalidation: a stale memo would still
+  // carry the old name and endpoint.
+  let assert Ok(warm) =
+    call(registry, fn(r) { provider_registry.Resolve("p1", r) })
+  warm.name |> should.equal("Bifrost")
+  warm.endpoint.api_key |> should.equal(Some("sk-live-007"))
+
   // A PATCH with no api_key (and a blank one is the same as none).
   let assert Ok(updated) =
     call(registry, fn(r) {
@@ -363,6 +372,13 @@ pub fn update_with_key_replaces_envelope_test() {
       )
     })
   let before = first_envelope(mock)
+
+  // Warm the memo with the OLD key before patching: without
+  // update-time invalidation the post-update Resolve below would
+  // hand back this cached credential and fail loudly.
+  let assert Ok(warm) =
+    call(registry, fn(r) { provider_registry.Resolve("p1", r) })
+  warm.endpoint.api_key |> should.equal(Some("sk-old"))
 
   let assert Ok(_) =
     call(registry, fn(r) {
@@ -548,6 +564,27 @@ pub fn describe_never_leaks_key_material_test() {
   |> should.equal("disk full")
   provider_registry.describe(provider_registry.ModelsFailed("HTTP 503"))
   |> should.equal("HTTP 503")
+}
+
+/// A provider may echo a rejected bearer key back in its error body,
+/// and transport reasons are `string.inspect` output — the registry's
+/// model-list error text must stay fixed: status code at most.
+pub fn model_list_error_text_is_fixed_test() {
+  provider_registry.describe_stream_error(openai.Non200(
+    401,
+    "invalid key sk-live-007 supplied",
+  ))
+  |> should.equal("model list failed: HTTP 401")
+
+  provider_registry.describe_stream_error(openai.Transport(
+    "{error, checkout_timeout}",
+  ))
+  |> should.equal("model list failed: transport error")
+
+  provider_registry.describe_stream_error(openai.Decode(
+    "expected list at /data",
+  ))
+  |> should.equal("model list failed: unreadable model list")
 }
 
 /// Envelope bytes must never equal plaintext, and plaintext never
