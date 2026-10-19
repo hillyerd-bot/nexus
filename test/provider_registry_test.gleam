@@ -58,11 +58,19 @@ fn key_bits() -> BitArray {
 fn start_registry(
   seam: store.Store,
 ) -> Result(Subject(provider_registry.Msg), Nil) {
+  start_registry_with_fetcher(seam, openai.list_models)
+}
+
+fn start_registry_with_fetcher(
+  seam: store.Store,
+  fetcher: fn(openai.Endpoint) -> Result(List(String), openai.StreamError),
+) -> Result(Subject(provider_registry.Msg), Nil) {
   case
-    provider_registry.start(
+    provider_registry.start_with_model_fetcher(
       test_config(),
       seam,
       process.new_name("nexus_test_providers"),
+      fetcher,
     )
   {
     Ok(started) -> Ok(started.data)
@@ -483,6 +491,58 @@ pub fn delete_guarded_while_pinned_test() {
   |> should.equal(Error(provider_registry.Unknown))
 }
 
+/// The race the FK covers: a session lands between the registry's
+/// count pre-check and the delete (think another instance, mid-delete).
+/// The recheck must turn the refused delete into StillReferenced —
+/// not a raw store failure.
+pub fn delete_race_surfaces_still_referenced_test() {
+  let mock = store_mock.start()
+  let base = store_mock.seam(mock)
+  let racing =
+    store.Store(..base, delete_provider: fn(id) {
+      // Exactly what the interleaving looks like at the store: the
+      // concurrent insert commits, THEN the delete is refused.
+      let assert Ok(Nil) = base.insert_session(pinned_session("s9", id), "sys")
+      Error("delete failed: provider still referenced")
+    })
+  let assert Ok(registry) = start_registry(racing)
+
+  let assert Ok(_) =
+    call(registry, fn(r) {
+      provider_registry.Create(
+        provider.ProviderParams("Bifrost", "https://api.example/v1", None),
+        r,
+      )
+    })
+  call(registry, fn(r) { provider_registry.Delete("p1", r) })
+  |> should.equal(Error(provider_registry.StillReferenced))
+}
+
+/// A refused delete whose recheck comes back clean stays a store
+/// failure with the ORIGINAL text — only a positive count is
+/// confidently the conflict.
+pub fn delete_failure_without_references_stays_store_failed_test() {
+  let mock = store_mock.start()
+  let base = store_mock.seam(mock)
+  let failing =
+    store.Store(..base, delete_provider: fn(_id) {
+      Error("disk exploded mid-delete")
+    })
+  let assert Ok(registry) = start_registry(failing)
+
+  let assert Ok(_) =
+    call(registry, fn(r) {
+      provider_registry.Create(
+        provider.ProviderParams("Bifrost", "https://api.example/v1", None),
+        r,
+      )
+    })
+  call(registry, fn(r) { provider_registry.Delete("p1", r) })
+  |> should.equal(
+    Error(provider_registry.StoreFailed("disk exploded mid-delete")),
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Boot: load + decrypt-validate the whole table, or fail loudly
 // ---------------------------------------------------------------------------
@@ -546,6 +606,59 @@ pub fn boot_fails_when_store_unreachable_test() {
       Error("connection refused")
     })
   start_registry(broken) |> should.be_error
+}
+
+// ---------------------------------------------------------------------------
+// ListModels: the fetch runs off the actor loop (never blocks Resolve)
+// ---------------------------------------------------------------------------
+
+/// With the fetch parked mid-flight, the registry must still answer
+/// `Resolve` — the whole point of running ListModels off-loop, since
+/// Resolve sits on the session-create path — and then deliver the
+/// model list once the fetch is released.
+pub fn list_models_fetch_never_blocks_resolve_test() {
+  let mock = store_mock.start()
+  let seam = store_mock.seam(mock)
+
+  // The fetcher runs inside the registry's spawned process: it hands
+  // back a gate it owns (cross-process receives only work on subjects
+  // the waiting process created), then parks until the test opens it.
+  let ready = process.new_subject()
+  let fetcher = fn(_endpoint) {
+    let gate = process.new_subject()
+    process.send(ready, gate)
+    let assert Ok(True) = process.receive(gate, 5000)
+    Ok(["held-model"])
+  }
+  let assert Ok(registry) = start_registry_with_fetcher(seam, fetcher)
+
+  let assert Ok(_) =
+    call(registry, fn(r) {
+      provider_registry.Create(
+        provider.ProviderParams("Bifrost", "https://api.example/v1", None),
+        r,
+      )
+    })
+
+  // Fire ListModels without waiting for its reply; the fetch is now
+  // in flight and HELD.
+  let models_reply = process.new_subject()
+  process.send(registry, provider_registry.ListModels("p1", models_reply))
+  let assert Ok(gate) = process.receive(ready, 5000)
+
+  // The actor loop is free: Resolve answers while the fetch is parked.
+  let assert Ok(resolved) =
+    call(registry, fn(r) { provider_registry.Resolve("p1", r) })
+  resolved.endpoint.api_key |> should.equal(None)
+
+  // Release: the fetch completes and the model list is delivered.
+  process.send(gate, True)
+  let assert Ok(Ok(models)) = process.receive(models_reply, 5000)
+  models |> should.equal(["held-model"])
+
+  // Unknown ids never start a fetch.
+  call(registry, fn(r) { provider_registry.ListModels("p404", r) })
+  |> should.equal(Error(provider_registry.Unknown))
 }
 
 // ---------------------------------------------------------------------------

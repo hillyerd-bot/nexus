@@ -22,7 +22,10 @@
 //// `ListModels` is the one network-touching message: it resolves the
 //// endpoint synchronously (state-only, fast) and then runs the live
 //// fetch in an unlinked process so a slow provider can never stall the
-//// actor — `Resolve` sits on the session-create path.
+//// actor — `Resolve` sits on the session-create path. The fetch
+//// transport is injected at start (`openai.list_models` in
+//// production) so offline tests can hold a fetch and prove that
+//// guarantee.
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
@@ -147,6 +150,11 @@ type State {
     /// ID minting only (`p<N>`), seeded past every stored id at boot.
     counter: Int,
     store: Store,
+    /// The live model-list transport. Injectable so the offline tests
+    /// can park a fetch mid-flight and assert the actor loop (and so
+    /// `Resolve`) never waits on it; production passes
+    /// `openai.list_models`.
+    fetch: fn(openai.Endpoint) -> Result(List(String), openai.StreamError),
   )
 }
 
@@ -159,6 +167,19 @@ pub fn start(
   cfg: Config,
   persistence: Store,
   name: process.Name(Msg),
+) -> actor.StartResult(Subject(Msg)) {
+  start_with_model_fetcher(cfg, persistence, name, openai.list_models)
+}
+
+/// Identical to `start`, with the model-list transport injected: the
+/// offline tests park a fetch to prove `ListModels` never blocks the
+/// actor loop (and therefore never `Resolve`). Production callers use
+/// `start`, which always passes `openai.list_models`.
+pub fn start_with_model_fetcher(
+  cfg: Config,
+  persistence: Store,
+  name: process.Name(Msg),
+  fetch: fn(openai.Endpoint) -> Result(List(String), openai.StreamError),
 ) -> actor.StartResult(Subject(Msg)) {
   let builder =
     actor.new_with_initialiser(5000, fn(self) {
@@ -180,6 +201,7 @@ pub fn start(
                     resolved: dict.new(),
                     counter: max_provider_counter(rows),
                     store: persistence,
+                    fetch: fetch,
                   ))
                   |> actor.returning(self)
                   |> actor.selecting(
@@ -387,7 +409,15 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
               // count was its friendly pre-check.
               case state.store.delete_provider(id) {
                 Error(error) -> {
-                  process.send(reply, Error(StoreFailed(error)))
+                  // A session landing after the pre-check (another
+                  // instance, mid-delete) trips the FK HERE — recheck
+                  // so the caller still gets the dedicated conflict
+                  // answer, never a raw store failure for that race.
+                  let outcome = case still_pinned(state, id) {
+                    True -> StillReferenced
+                    False -> StoreFailed(error)
+                  }
+                  process.send(reply, Error(outcome))
                   actor.continue(state)
                 }
                 Ok(Nil) -> {
@@ -457,7 +487,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
                 // Runs in the caller-concurrency world, not the actor:
                 // up to the first-response timeout of slow time.
                 let outcome =
-                  openai.list_models(resolved.endpoint)
+                  state.fetch(resolved.endpoint)
                   |> result.map_error(fn(error) {
                     ModelsFailed(describe_stream_error(error))
                   })
@@ -467,6 +497,17 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             }
           }
       }
+  }
+}
+
+/// After a refused delete, is the FK story confirmed? A session that
+/// landed between the pre-check and the delete (the multi-instance
+/// race) shows up on the recheck; a zero or unavailable count keeps
+/// the ORIGINAL delete error rather than guessing a conflict.
+fn still_pinned(state: State, id: String) -> Bool {
+  case state.store.count_sessions_for_provider(id) {
+    Ok(n) -> n > 0
+    Error(_) -> False
   }
 }
 
