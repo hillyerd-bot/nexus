@@ -161,6 +161,56 @@ pub fn update_unknown_provider_is_noop_test() {
   seam.list_providers() |> should.equal(Ok([]))
 }
 
+pub fn update_rejects_rename_collision_test() {
+  let mock = store_mock.start()
+  let seam = store_mock.seam(mock)
+  let assert Ok(Nil) = seam.insert_provider(provider("p1", "one", None, 1))
+  let assert Ok(Nil) = seam.insert_provider(provider("p2", "two", None, 1))
+
+  // provider_name_key: renaming p1 onto p2's name is refused — no state
+  // change, no update event.
+  seam.update_provider(provider("p1", "two", None, 1), False)
+  |> should.be_error
+  let assert Ok(unchanged) = seam.get_provider("p1")
+  unchanged.name |> should.equal("one")
+  should.be_false(
+    store_mock.events(mock)
+    |> list.any(fn(event) {
+      case event {
+        store_mock.EvUpdateProvider("p1") -> True
+        _ -> False
+      }
+    }),
+  )
+}
+
+pub fn update_preserves_server_controlled_fields_test() {
+  let seam = store_mock.seam(store_mock.start())
+  let assert Ok(Nil) = seam.insert_provider(provider("p1", "one", None, 1))
+
+  // The caller's record carries junk created_at/updated_at/dialect. The
+  // SQL SET list ignores created_at and dialect (they stay from the
+  // stored row) and stamps updated_at itself (`now()`), so the mock
+  // must not let any of the three through.
+  let assert Ok(Nil) =
+    seam.update_provider(
+      store.StoredProvider(
+        ..provider("p1", "renamed", None, 1),
+        created_at: 9_999_999_999,
+        updated_at: 9_999_999_999,
+        dialect: "weird",
+      ),
+      False,
+    )
+  let assert Ok(stored) = seam.get_provider("p1")
+  stored.created_at |> should.equal(1_700_000_000)
+  stored.dialect |> should.equal("openai")
+  // Server-stamped: between the fixture's fixed 2023 epoch and the
+  // caller's junk 2286 value lies the test's real wall clock.
+  should.be_true(stored.updated_at > stored.created_at)
+  should.be_true(stored.updated_at < 9_999_999_999)
+}
+
 pub fn session_pin_and_delete_guard_test() {
   let mock = store_mock.start()
   let seam = store_mock.seam(mock)

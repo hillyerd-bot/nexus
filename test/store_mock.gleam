@@ -580,29 +580,53 @@ fn handle(state: State, msg: MockMsg) -> actor.Next(State, MockMsg) {
           actor.continue(state)
         }
         Ok(stored) -> {
-          // update_provider.sql: replace_key = false keeps the stored
-          // envelope and key_version; true takes the record's (None =
-          // go keyless).
-          let updated =
-            store.StoredProvider(
-              ..provider,
-              api_key_encrypted: case replace_key {
-                True -> provider.api_key_encrypted
-                False -> stored.api_key_encrypted
-              },
-              key_version: case replace_key {
-                True -> provider.key_version
-                False -> stored.key_version
-              },
-            )
-          process.send(reply, Ok(Nil))
-          actor.continue(
-            State(
-              ..state,
-              providers: dict.insert(state.providers, provider.id, updated),
-              events: [EvUpdateProvider(provider.id), ..state.events],
-            ),
-          )
+          // provider_name_key: renaming onto another provider's name is
+          // refused, like the schema's UNIQUE constraint — no state
+          // change, no event.
+          case
+            list.any(dict.values(state.providers), fn(existing) {
+              existing.id != provider.id && existing.name == provider.name
+            })
+          {
+            True -> {
+              process.send(
+                reply,
+                Error("provider name " <> provider.name <> " exists"),
+              )
+              actor.continue(state)
+            }
+            False -> {
+              // update_provider.sql's SET list is name / base_url /
+              // the gated key fields / enabled, with `updated_at =
+              // now()` server-side: created_at and dialect stay from
+              // the stored row. The mock mirrors that exactly, so
+              // identical updates produce identical metadata through
+              // either implementation.
+              let updated =
+                store.StoredProvider(
+                  ..provider,
+                  created_at: stored.created_at,
+                  dialect: stored.dialect,
+                  updated_at: timing.wall_now_s(),
+                  api_key_encrypted: case replace_key {
+                    True -> provider.api_key_encrypted
+                    False -> stored.api_key_encrypted
+                  },
+                  key_version: case replace_key {
+                    True -> provider.key_version
+                    False -> stored.key_version
+                  },
+                )
+              process.send(reply, Ok(Nil))
+              actor.continue(
+                State(
+                  ..state,
+                  providers: dict.insert(state.providers, provider.id, updated),
+                  events: [EvUpdateProvider(provider.id), ..state.events],
+                ),
+              )
+            }
+          }
         }
       }
 
